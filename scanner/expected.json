@@ -1,0 +1,26 @@
+{
+  "source": "SPEC.md Acceptance tests: pulled 2026-10-15 from the 2026-10-11 (LA) and 2026-10-09 (SF) refreshes",
+  "report_year": {"LA": 2025, "SF": 2025},
+  "drift_warn_pct": 2.0,
+  "pinned_rows_updated_at": {
+    "LA": "2026-10-11T08:01:53+00:00",
+    "SF": "2026-10-10T00:10:46+00:00"
+  },
+  "counts": {
+    "la_not_complied": 5253,
+    "la_complied": 5988,
+    "la_prev_not_complied": 4207,
+    "la_lapsed": 1388,
+    "la_chronic": 3327,
+    "la_other": 538,
+    "la_nc_data_on_file": 624,
+    "la_nc_no_data_on_file": 4629,
+    "la_nc_city_owned": 216,
+    "sf_did_not_report": 628,
+    "sf_insufficient_data": 18,
+    "sf_complied": 1752,
+    "sf_exempt": 90,
+    "sf_audit_did_not_comply": 620,
+    "sf_violation_and_audit_did_not_comply": 290
+  }
+}

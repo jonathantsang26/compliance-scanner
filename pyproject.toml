@@ -1,0 +1,12 @@
+[project]
+name = "compliance-scanner"
+version = "0.1.0"
+description = "Which LA and SF buildings are out of compliance with their city's energy benchmarking law, per the cities' own open data"
+requires-python = ">=3.12"
+dependencies = ["requests>=2.31"]
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

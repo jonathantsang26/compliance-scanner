@@ -1,0 +1,99 @@
+# Nightly refresh: pull both city datasets, rebuild, test, and (once the
+# founder turns it on) publish the static site to GitHub Pages.
+#
+# Before the first run (see README "Deploy"):
+#   1. Add repository secret SOCRATA_APP_TOKEN (free, from data.lacity.org or data.sf.gov).
+#   2. Settings > Pages > Source: GitHub Actions.
+#   3. Only after the founder approves the public URL: add repository
+#      variable DEPLOY_ENABLED = true. Until then nothing runs on the schedule,
+#      and a run started by hand builds and tests but never publishes.
+name: Nightly refresh
+
+on:
+  schedule:
+    # 13:17 UTC is 6:17 AM PDT / 5:17 AM PST. LA last published at 08:01 UTC,
+    # so the run lands after LA's usual publish. Off the hour to avoid queue spikes.
+    - cron: "17 13 * * *"
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Download again even if the city data has not changed"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nightly-refresh
+  cancel-in-progress: false
+
+jobs:
+  build:
+    # The schedule starts only once publishing is switched on, so pushing the
+    # repo alone never pulls city data or fails nightly for a missing token.
+    if: github.event_name == 'workflow_dispatch' || vars.DEPLOY_ENABLED == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+
+      # Keep the last snapshots between runs: the pull reuses them when a city
+      # has not published anything new (SF updates monthly), and refuses a
+      # sudden large drop in rows compared with them.
+      - name: Restore previous snapshots
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: data/raw
+          key: raw-${{ github.run_id }}
+          restore-keys: raw-
+
+      - name: Install
+        run: |
+          python -m pip install --no-deps -r requirements.txt
+          npm ci --ignore-scripts
+
+      - name: Pull, check counts, build, export
+        env:
+          SOCRATA_APP_TOKEN: ${{ secrets.SOCRATA_APP_TOKEN }}
+        run: python -m scanner.build --require-token ${{ inputs.force && '--force' || '' }}
+
+      - name: Save snapshots
+        if: success()
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: data/raw
+          key: raw-${{ github.run_id }}
+
+      - name: Test
+        run: |
+          python -m pytest -q
+          npm test
+          npm run e2e
+
+      - name: Package site
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    if: vars.DEPLOY_ENABLED == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1

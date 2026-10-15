@@ -1,0 +1,13 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+node_modules/
+
+# Pulled and built data: rebuilt nightly, too big for git.
+data/raw/
+data/scanner.db
+site/data/
+dist/
+site/data.tmp/
+site/data.old/
