@@ -11,3 +11,6 @@ site/data/
 dist/
 site/data.tmp/
 site/data.old/
+
+# Downloaded research evidence (about 380 MB, third-party pages): local only.
+docs/research/archive/

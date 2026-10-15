@@ -105,15 +105,15 @@ Quotes are copied from the page; only spacing was cleaned up. "Our count" means 
 
 ### Where the evidence files are
 
-Downloaded pages, PDFs, archive copies and query results sit in the session scratchpad. It is temporary, so copy what you want into the repo (README and config.py point to `docs/research/`, which does not exist yet):
+`docs/research/sources.json` holds the research and verification results this memo was built from, with each source's URL. The downloaded copies (pages, PDFs, archive snapshots and query results, about 380 MB) are kept locally in `docs/research/archive/`. That folder is in `.gitignore`, so it is not in the GitHub repo:
 
-- /private/tmp/claude-501/-Users-jonathantsang/b045b256-d0a7-4268-bdd6-5095e27b953d/scratchpad/research/lamc-ebewe/ (LA code and ordinances)
-- /private/tmp/claude-501/-Users-jonathantsang/b045b256-d0a7-4268-bdd6-5095e27b953d/scratchpad/research/ladbs/ (LADBS PDFs, portal pages, live status reports)
-- /private/tmp/claude-501/-Users-jonathantsang/b045b256-d0a7-4268-bdd6-5095e27b953d/scratchpad/research/la-ebewe-secondary/ (vendor pages and cross-checks)
-- /private/tmp/claude-501/-Users-jonathantsang/b045b256-d0a7-4268-bdd6-5095e27b953d/scratchpad/research/la-fidelity-check/ and /private/tmp/claude-501/-Users-jonathantsang/b045b256-d0a7-4268-bdd6-5095e27b953d/scratchpad/research/la-opposite-check/ (LA verification)
-- /private/tmp/claude-501/-Users-jonathantsang/b045b256-d0a7-4268-bdd6-5095e27b953d/scratchpad/research/sf/ (SF pages, code, ordinances, dataset metadata)
-- /private/tmp/claude-501/-Users-jonathantsang/b045b256-d0a7-4268-bdd6-5095e27b953d/scratchpad/research/sf-fidelity-check/ and /private/tmp/claude-501/-Users-jonathantsang/b045b256-d0a7-4268-bdd6-5095e27b953d/scratchpad/research/sf-adversarial/ (SF verification, archived dataset copies)
-- /private/tmp/claude-501/-Users-jonathantsang/b045b256-d0a7-4268-bdd6-5095e27b953d/scratchpad/research/memo-synthesis/ (this memo's draft)
+- `archive/lamc-ebewe/` (LA code and ordinances)
+- `archive/ladbs/` (LADBS PDFs, portal pages, live status reports)
+- `archive/la-ebewe-secondary/` (vendor pages and cross-checks)
+- `archive/la-fidelity-check/` and `archive/la-opposite-check/` (LA verification)
+- `archive/sf/` (SF pages, code, ordinances, dataset metadata)
+- `archive/sf-fidelity-check/` and `archive/sf-adversarial/` (SF verification, archived dataset copies)
+- `archive/memo-synthesis/` (this memo's draft)
 
 ## 3. What it means for the outreach lines
 
