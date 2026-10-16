@@ -46,12 +46,13 @@ YEAR_NOTES = {
 #   LA_OUTREACH_APPROVED: the founder signs off on what LA's program year
 #     means (research says calendar-2025 data, due June 1, 2026). Until then
 #     LA outreach lines (and the LA year note) are generated and tested but
-#     never published or exported.
+#     never published or exported. Signed off 2026-10-16, with the spec's line
+#     wording plus the source link.
 #   SF_DUE_DATE_CONFIRMED: SF Environment's page says "The 2025 Annual Energy
 #     Benchmark is due May 1, 2026." (confirmed 2026-10-15). The city code still
 #     says April 1, so the sentence credits SF Environment instead of stating
 #     the date as law.
-LA_OUTREACH_APPROVED = False
+LA_OUTREACH_APPROVED = True
 SF_DUE_DATE_CONFIRMED = True
 SF_DUE_DATE_SENTENCES = {
     2025: "SF Environment says the 2025 Annual Energy Benchmark was due May 1, 2026.",

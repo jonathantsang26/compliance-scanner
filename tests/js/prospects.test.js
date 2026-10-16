@@ -95,7 +95,9 @@ test('outreach lines: none for city-owned rows, none for LA while gated, and eac
     assert.ok(r.outreach_line.includes(`(as of ${meta.cities[r.city].as_of_label})`), r.id);
     // The line drops stray punctuation at the end of the city's address ("2544 Mission St,").
     assert.ok(r.outreach_line.includes(r.address.replace(/[\s,.;]+$/, '')), r.id);
-    assert.ok(r.outreach_line.includes(`'${r.status_raw}'`), `${r.id} quotes the city's label`);
+    // SF quotes its label; LA's sentence from the spec names it unquoted.
+    const label = r.city === 'SF' ? `'${r.status_raw}'` : ` as ${r.status_raw} for program year ${r.year}.`;
+    assert.ok(r.outreach_line.includes(label), `${r.id} quotes the city's label`);
     assert.doesNotMatch(r.outreach_line, /penalt|\bfines?\b|\$\s?\d/i, r.id);
     if (r.city === 'LA') {
       assert.match(r.outreach_line, /NOT COMPLIED/);

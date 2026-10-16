@@ -99,7 +99,7 @@ function outreachCell(r) {
     if (r.city_owned) why = 'City-owned: kept out of outreach';
     // Mirrors outreach.clean_address: a comma left inside may mean several addresses.
     else if (r.address.trim().replace(/[,;:]+$/, '').trim().includes(',')) why = 'Address needs a hand check';
-    else if (r.city === 'LA') why = 'Held for founder sign-off';
+    else if (r.city === 'LA' && !meta.flags.la_outreach_approved) why = 'Held for founder sign-off';
     return h('span', { class: 'muted small' }, why);
   }
   const button = h('button', { type: 'button', class: 'secondary', onclick: () => copyText(r.outreach_line, button) }, 'Copy line');

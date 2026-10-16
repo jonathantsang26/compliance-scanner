@@ -119,7 +119,7 @@ Quotes are copied from the page; only spacing was cleaned up. "Our count" means 
 
 ### LA
 
-Current line (held while `LA_OUTREACH_APPROVED = False`). Every line, in both cities, ends with its row's source link:
+Current line (live since the founder's sign-off on 2026-10-16: `LA_OUTREACH_APPROVED = True`). Every line, in both cities, ends with its row's source link:
 
 > LADBS's public EBEWE data (as of {as_of}) lists {address} as NOT COMPLIED for program year 2025. Source: {source_url}
 
@@ -173,9 +173,9 @@ SF as-of date: every SF row says data_as_of 2026-10-08 ("Timestamp when the reco
 
 ## 4. Decisions for the founder
 
-1. **Accept the LA reading.** program_year 2025 = calendar-2025 data, due June 1, 2026. Recommended: accept. Confidence is high.
-2. **Pick the LA line.** Recommended: the version with the data year and due date. Then update `la_line` in `scanner/outreach.py` and set `LA_OUTREACH_APPROVED = True` in `scanner/config.py`.
-3. **Pick the lapsed add-on.** Recommended: LADBS's column name instead of "filed by".
+1. **Accept the LA reading.** program_year 2025 = calendar-2025 data, due June 1, 2026. Recommended: accept. Confidence is high. Done: accepted 2026-10-16.
+2. **Pick the LA line.** Recommended: the version with the data year and due date. Then update `la_line` in `scanner/outreach.py` and set `LA_OUTREACH_APPROVED = True` in `scanner/config.py`. Decided 2026-10-16: the spec's wording plus the source link (the current line above), with `LA_OUTREACH_APPROVED = True`.
+3. **Pick the lapsed add-on.** Recommended: LADBS's column name instead of "filed by". Decided 2026-10-16: keep "filed by".
 4. **Approve the SF date sentence, credited to SF Environment.** Done in the code: `SF_DUE_DATE_SENTENCES[2025]` is "SF Environment says the 2025 Annual Energy Benchmark was due May 1, 2026." and `SF_DUE_DATE_CONFIRMED = True` (`scanner/config.py`). To turn it off, set `SF_DUE_DATE_CONFIRMED = False`.
 5. **Add the "recent changes may not show yet" clause?** Optional. Recommended for both cities.
 6. **SF as-of date: October 8 or October 9?** Either is true. October 8 is safer. (Today the as-of date is the portal's rowsUpdatedAt, per the README.)

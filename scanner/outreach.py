@@ -91,7 +91,9 @@ def main(argv=None) -> int:
     meta = city_meta(con)
     records = building_records(con)
     con.close()
-    print("PREVIEW ONLY. LA lines are not published until config.LA_OUTREACH_APPROVED is True.\n")
+    gate = ("LA lines go into the site data and CSV (config.LA_OUTREACH_APPROVED is True)." if LA_OUTREACH_APPROVED
+            else "LA lines stay out of the site data and CSV until config.LA_OUTREACH_APPROVED is True.")
+    print(f"PREVIEW ONLY. {gate}\n")
     for city in ("LA", "SF"):
         label = meta[city]["as_of_label"]
         for segment in ("lapsed", "chronic", "other", "did_not_report", "insufficient_data"):
