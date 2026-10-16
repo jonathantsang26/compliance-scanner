@@ -119,15 +119,15 @@ Quotes are copied from the page; only spacing was cleaned up. "Our count" means 
 
 ### LA
 
-Current line (held while `LA_OUTREACH_APPROVED = False`):
+Current line (held while `LA_OUTREACH_APPROVED = False`). Every line, in both cities, ends with its row's source link:
 
-> LADBS's public EBEWE data (as of {as_of}) lists {address} as NOT COMPLIED for program year 2025.
+> LADBS's public EBEWE data (as of {as_of}) lists {address} as NOT COMPLIED for program year 2025. Source: {source_url}
 
 It is accurate. But a reader can take "2025" to mean the 2025 filing. Recommended:
 
 > LADBS's public EBEWE data (as of {as_of}) lists {address} as NOT COMPLIED for program year 2025 (calendar-2025 energy and water data, which LADBS says was due June 1, 2026).
 
-Lapsed add-on today:
+Lapsed add-on today, placed before the source link. The "filed by" part is left out when the name is withheld as possibly a person's, or missing:
 
 > It was listed as COMPLIED for 2024, filed by {last_filed_by}.
 
@@ -154,13 +154,9 @@ The same fix fits the home page headline. "5,253 LA buildings marked NOT COMPLIE
 
 ### SF
 
-Current did-not-report line (the date sentence is held while `SF_DUE_DATE_CONFIRMED = False`):
+Current did-not-report line (live: `SF_DUE_DATE_CONFIRMED = True`, sentence in `SF_DUE_DATE_SENTENCES`). It keeps the spec's first sentence and credits the date to SF Environment in its own words, instead of the spec's "The 2025 benchmark was due May 1, 2026.":
 
-> SF Environment's public data (as of {as_of}) lists {address} as '2025 - Violation - Did Not Report'. The 2025 benchmark was due May 1, 2026.
-
-Recommended: keep the first sentence, and credit the date to SF Environment in its own words:
-
-> SF Environment's public data (as of {as_of}) lists {address} as '2025 - Violation - Did Not Report'. SF Environment says the 2025 Annual Energy Benchmark was due May 1, 2026.
+> SF Environment's public data (as of {as_of}) lists {address} as '2025 - Violation - Did Not Report'. SF Environment says the 2025 Annual Energy Benchmark was due May 1, 2026. Source: {source_url}
 
 Why credit it: the code says April 1. If an owner checks the code, the line is still true, because it reports what the agency says. Never cite Sec. 2004 for May 1.
 
@@ -180,7 +176,7 @@ SF as-of date: every SF row says data_as_of 2026-10-08 ("Timestamp when the reco
 1. **Accept the LA reading.** program_year 2025 = calendar-2025 data, due June 1, 2026. Recommended: accept. Confidence is high.
 2. **Pick the LA line.** Recommended: the version with the data year and due date. Then update `la_line` in `scanner/outreach.py` and set `LA_OUTREACH_APPROVED = True` in `scanner/config.py`.
 3. **Pick the lapsed add-on.** Recommended: LADBS's column name instead of "filed by".
-4. **Approve the SF date sentence, credited to SF Environment.** Recommended: set `SF_DUE_DATE_SENTENCE` to "SF Environment says the 2025 Annual Energy Benchmark was due May 1, 2026." and then set `SF_DUE_DATE_CONFIRMED = True`.
+4. **Approve the SF date sentence, credited to SF Environment.** Done in the code: `SF_DUE_DATE_SENTENCES[2025]` is "SF Environment says the 2025 Annual Energy Benchmark was due May 1, 2026." and `SF_DUE_DATE_CONFIRMED = True` (`scanner/config.py`). To turn it off, set `SF_DUE_DATE_CONFIRMED = False`.
 5. **Add the "recent changes may not show yet" clause?** Optional. Recommended for both cities.
 6. **SF as-of date: October 8 or October 9?** Either is true. October 8 is safer. (Today the as-of date is the portal's rowsUpdatedAt, per the README.)
 7. **Hand-check LADBS's live status page before each LA send?** Recommended: yes, by hand. No scraping.

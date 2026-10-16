@@ -7,6 +7,9 @@
 These counts are worked out straight from the raw rows, on purpose without the
 classifier in scanner/classify.py. The two are written separately so that a bug
 in one shows up as a mismatch against the other (see tests/).
+
+After config.REPORT_YEAR rolls forward, it prints the new year's counts and the
+exact steps to re-pin scanner/expected.json, then exits 1 until that is done.
 """
 
 import argparse
@@ -110,15 +113,32 @@ def compare(got: dict, expected: dict, warn_pct: float) -> list[dict]:
     return results
 
 
-def load_expected() -> dict:
+def load_expected(check_year: bool = True) -> dict:
     """The pinned spec counts. They only apply while REPORT_YEAR matches the year they were pinned for."""
     expected = json.loads(EXPECTED_PATH.read_text())
-    if expected["report_year"] != REPORT_YEAR:
+    if check_year and expected["report_year"] != REPORT_YEAR:
         raise SystemExit(
             f"scanner/expected.json is pinned for {expected['report_year']} but REPORT_YEAR is {REPORT_YEAR}. "
-            "Re-pin it from `python -m scanner.counts` output after rolling forward."
+            "Run `python -m scanner.counts` and follow the steps it prints to re-pin it."
         )
     return expected
+
+
+def repin_steps(pinned_year: dict, got: dict, manifests) -> str:
+    """What to change in scanner/expected.json once REPORT_YEAR has rolled forward."""
+    new_pin = {
+        "report_year": REPORT_YEAR,
+        "pinned_rows_updated_at": {m["dataset"]: m["rows_updated_at"] for m in manifests},
+        "counts": got,
+    }
+    return (
+        f"\nscanner/expected.json is pinned for {pinned_year} but REPORT_YEAR is {REPORT_YEAR}, "
+        "so nothing above was compared. To re-pin it:\n"
+        '  1. In scanner/expected.json, set "report_year" and "pinned_rows_updated_at" as in the block below.\n'
+        '  2. Copy the got column above into "counts" (the block below has the same numbers).\n'
+        "  3. Rerun python -m scanner.counts. Every check should then say MATCH.\n"
+        + json.dumps(new_pin, indent=2)
+    )
 
 
 def live_crosscheck(la_rows: list[dict], sf_rows: list[dict]) -> list[str]:
@@ -163,7 +183,10 @@ def main(argv=None) -> int:
 
     la_rows, la_manifest = load_latest("LA")
     sf_rows, sf_manifest = load_latest("SF")
-    pinned = load_expected()
+    pinned = load_expected(check_year=False)
+    # Right after REPORT_YEAR rolls forward, the pin still holds the old year's
+    # counts. Print the new year's counts anyway, so they can be pinned.
+    repin = pinned["report_year"] != REPORT_YEAR
 
     for m in (la_manifest, sf_manifest):
         note = "" if m["rows_updated_at"] == pinned["pinned_rows_updated_at"][m["dataset"]] else "  <- newer than the spec's pinned refresh"
@@ -178,12 +201,17 @@ def main(argv=None) -> int:
     for (year, status), n in sorted(Counter((r["benchmark_year"], r["benchmark_status"]) for r in sf_rows if r["benchmark_year"] in sf_years).items()):
         print(f"  {status:<40} {n:>6,}")
 
-    got = {**la_counts(la_rows), **sf_counts(sf_rows)}
-    results = compare(got, pinned["counts"], pinned["drift_warn_pct"])
-    print(f"\n{'check':<46}{'expected':>9}{'got':>9}  verdict")
-    for r in results:
-        extra = f" ({r['drift_pct']}%)" if r["verdict"] != "MATCH" else ""
-        print(f"{label(r['check']):<46}{r['expected']:>9,}{r['got']:>9,}  {r['verdict']}{extra}")
+    got = {**la_counts(la_rows, REPORT_YEAR["LA"]), **sf_counts(sf_rows, REPORT_YEAR["SF"])}
+    results = [] if repin else compare(got, pinned["counts"], pinned["drift_warn_pct"])
+    if repin:
+        print(f"\n{'check':<46}{'got':>9}")
+        for name, have in got.items():
+            print(f"{label(name):<46}{have:>9,}")
+    else:
+        print(f"\n{'check':<46}{'expected':>9}{'got':>9}  verdict")
+        for r in results:
+            extra = f" ({r['drift_pct']}%)" if r["verdict"] != "MATCH" else ""
+            print(f"{label(r['check']):<46}{r['expected']:>9,}{r['got']:>9,}  {r['verdict']}{extra}")
     print(f"\nLA lapsed + chronic + other = {got['la_lapsed'] + got['la_chronic'] + got['la_other']:,}"
           f" (NOT COMPLIED {REPORT_YEAR['LA']} = {got['la_not_complied']:,})")
 
@@ -195,6 +223,9 @@ def main(argv=None) -> int:
             print("  MISMATCH", p)
         if problems and args.strict:
             return 1
+    if repin:
+        print(repin_steps(pinned["report_year"], got, (la_manifest, sf_manifest)))
+        return 1
     if failed:
         message = f"{len(failed)} count(s) drifted more than {pinned['drift_warn_pct']}% from the pinned spec values"
         print(f"\nWARNING: {message}")

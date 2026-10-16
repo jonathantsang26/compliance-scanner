@@ -6,6 +6,12 @@ from scanner import build, pull, snapshot
 from scanner.config import LA
 
 
+@pytest.fixture(autouse=True)
+def no_workflow_output(monkeypatch):
+    """CI sets GITHUB_OUTPUT for its test step too; these tests must not write to it."""
+    monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
+
+
 @pytest.fixture
 def raw_dir(tmp_path, monkeypatch):
     monkeypatch.setattr(snapshot, "RAW", tmp_path)
@@ -61,6 +67,35 @@ def test_one_city_failing_does_not_block_the_other(monkeypatch):
         monkeypatch.setattr(getattr(build, name), "main", lambda argv, n=name: calls.append(n) or 0)
     assert build.main([]) == 0
     assert calls == ["counts", "build_db", "export"]
+
+
+def stub_build(monkeypatch, pull_code):
+    monkeypatch.setattr(build.pull, "main", lambda args: pull_code)
+    monkeypatch.setattr(build, "snapshot_ok", lambda city: True)
+    for name in ("counts", "build_db", "export"):
+        monkeypatch.setattr(getattr(build, name), "main", lambda argv: 0)
+
+
+def test_a_partial_refresh_tells_the_workflow(tmp_path, monkeypatch):
+    # The nightly's last job fails the run on this, after the healthy city is published.
+    output = tmp_path / "github_output"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(output))
+    stub_build(monkeypatch, pull_code=1)
+    assert build.main([]) == 0
+    assert output.read_text() == "partial=true\n"
+
+
+def test_a_full_refresh_is_not_marked_partial(tmp_path, monkeypatch):
+    output = tmp_path / "github_output"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(output))
+    stub_build(monkeypatch, pull_code=0)
+    assert build.main([]) == 0
+    assert not output.exists()
+
+
+def test_a_partial_refresh_outside_ci_needs_no_output_file(monkeypatch):
+    stub_build(monkeypatch, pull_code=1)
+    assert build.main([]) == 0  # no GITHUB_OUTPUT here (see the fixture above)
 
 
 def test_no_usable_snapshot_stops_the_build(monkeypatch):

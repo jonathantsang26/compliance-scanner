@@ -21,7 +21,7 @@
   </header>
   <main id="main" class="wrap">
     <h1>Prospect list</h1>
-    <p class="lede">Buildings each city lists as out of compliance for 2025. Priority A: LA buildings listed as COMPLIED for 2024 but NOT COMPLIED for 2025 (lapsed), and every SF violation. Priority B: other LA non-compliers. Within each priority, larger buildings come first.</p>
+    <p id="lede" class="lede">Buildings each city lists as out of compliance for the latest year in its data. Priority A: LA buildings listed as COMPLIED one year but NOT COMPLIED the next (lapsed), and every SF violation. Priority B: other LA non-compliers. Within each priority, larger buildings come first.</p>
     <p id="asof" class="muted small"></p>
     <div id="notices"></div>
     <noscript>
@@ -37,6 +37,7 @@
       <p class="count" style="margin:0"><span id="count" aria-live="polite">Loading…</span></p>
       <button type="button" id="download" disabled>Download CSV</button>
     </div>
+    <p id="owned-note" class="owned-note muted small js-only" role="status"></p>
     <div class="table-wrap js-only">
       <table class="stack prospects">
         <thead>

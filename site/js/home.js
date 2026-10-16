@@ -1,14 +1,12 @@
-import { buildIndex, buildingUrl, exactMatch, formatInt, makeLookup, rawStatusTone, search } from './core.js';
+import {
+  buildIndex, buildingUrl, exactMatch, formatInt, makeLookup, rawStatusTone, search, searchStatus,
+} from './core.js';
 import { asOfLine, external, h, loadMeta, loadSearchDocs, renderFooter, showError } from './ui.js';
 
 const form = document.getElementById('search-form');
 const input = document.getElementById('q');
 const results = document.getElementById('results');
 const status = document.getElementById('search-status');
-
-// Says what to try next, never that the building isn't covered: the words may
-// just be spelled differently from the city's data.
-const NO_MATCHES = 'Nothing matched all of those words. Try just the street number and name (for example 5500 S Figueroa), an LA building ID, or an SF parcel number.';
 
 let ready = null; // Promise of {index, lookup}; rejects if the data can't load
 
@@ -50,20 +48,6 @@ function resultItem(doc) {
       h('span', { class: `status-chip tone-${rawStatusTone(doc.status)}` }, `${doc.status} · ${doc.year}`)));
 }
 
-function statusText(result, submitted) {
-  const { exact, hits, addressMatches } = result;
-  if (!hits.length) return NO_MATCHES;
-  if (submitted) {
-    // Enter only opens a building on an exact match (search().target), so
-    // say why the list is still showing.
-    if (exact && !exact.direct) return `LA building ID ${exact.doc.key} is listed first. Other buildings have ${exact.doc.key} as a house number.`;
-    if (result.bothCities) return 'Both LA and SF list a building at that address. Pick one:';
-    if (addressMatches > 1) return `${addressMatches} records have that address. Pick one:`;
-    return 'No exact match for that address. Closest matches:';
-  }
-  return `${hits.length === 25 ? 'Top 25' : hits.length} match${hits.length === 1 ? '' : 'es'}`;
-}
-
 async function run(query, { navigate = false } = {}) {
   const q = query.trim();
   if (!q) {
@@ -88,7 +72,7 @@ async function run(query, { navigate = false } = {}) {
     return;
   }
   results.replaceChildren(...result.hits.map(resultItem));
-  status.textContent = statusText(result, navigate);
+  status.textContent = searchStatus(result, navigate);
 }
 
 let timer;
@@ -115,7 +99,7 @@ async function init() {
     const exact = q ? exactMatch(q, lookup) : null;
     if (exact?.direct) window.location.replace(buildingUrl(exact.doc.id));
     // A ?q= search runs now, unless the person already searched: that search is
-    // waiting for the same data, and its message ("No exact match…") must stay.
+    // waiting for the same data, and its message ("No single exact match…") must stay.
     else if (input.value.trim() && !userSearched) run(input.value);
   }, (err) => showError(status, `Search is unavailable (${err.message}).`));
 

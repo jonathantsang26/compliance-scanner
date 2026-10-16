@@ -1,5 +1,6 @@
 # Nightly refresh: pull both city datasets, rebuild, test, and (once the
-# founder turns it on) publish the static site to GitHub Pages.
+# founder turns it on) publish the static site to GitHub Pages. If one city's
+# pull fails, the other city still refreshes and the run ends red.
 #
 # Before the first run (see README "Deploy"):
 #   1. Add repository secret SOCRATA_APP_TOKEN (free, from data.lacity.org or data.sf.gov).
@@ -35,6 +36,9 @@ jobs:
     if: github.event_name == 'workflow_dispatch' || vars.DEPLOY_ENABLED == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    outputs:
+      # 'true' when a city's pull failed and its last good snapshot was used.
+      partial: ${{ steps.refresh.outputs.partial }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -62,6 +66,7 @@ jobs:
           npm ci --ignore-scripts
 
       - name: Pull, check counts, build, export
+        id: refresh
         env:
           SOCRATA_APP_TOKEN: ${{ secrets.SOCRATA_APP_TOKEN }}
         run: python -m scanner.build --require-token ${{ inputs.force && '--force' || '' }}
@@ -97,3 +102,27 @@ jobs:
     steps:
       - id: deployment
         uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
+
+  # A partial refresh still publishes the city that refreshed (deploy above),
+  # then turns the run red here so GitHub sends its failure email. Skipped
+  # with build, so nothing runs on the schedule until DEPLOY_ENABLED is set.
+  status:
+    needs: [build, deploy]
+    if: always() && needs.build.result != 'skipped'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Fail on a failed build or a partial refresh
+        env:
+          BUILD_RESULT: ${{ needs.build.result }}
+          PARTIAL: ${{ needs.build.outputs.partial }}
+        run: |
+          if [ "$BUILD_RESULT" != "success" ]; then
+            echo "::error title=Build failed::The build job ended with '$BUILD_RESULT', so the site was not updated."
+            exit 1
+          fi
+          if [ "$PARTIAL" = "true" ]; then
+            echo "::error title=Partial refresh::A city's pull failed, so that city kept its last good data. The pull errors in the build job's log say why."
+            exit 1
+          fi
+          echo "Both cities' pulls succeeded."

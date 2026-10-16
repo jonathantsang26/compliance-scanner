@@ -6,7 +6,7 @@ import { existsSync, readFileSync } from 'node:fs';
 
 import {
   buildIndex, cleanQuery, exactMatch, makeLookup, neighbors, normalizeParcel, normalizeTerm, parseQuery, rankByDirection,
-  search, shardOf, splitDirectional, tokenize,
+  search, searchStatus, shardOf, splitDirectional, terms, tokenize,
 } from '../../site/js/core.js';
 
 const DATA = new URL('../../site/data/', import.meta.url);
@@ -346,24 +346,46 @@ test('pasted full addresses find the building', { skip }, () => {
 });
 
 test('pasted addresses are cut down to the street address and ZIP', () => {
+  // [pasted, text searched, ZIP, units, city typed]
   const cases = [
-    ['5500 S Figueroa St, Los Angeles, CA 90037', '5500 S Figueroa St', '90037'],
-    ['2739 Taylor St, San Francisco, CA 94133, USA', '2739 Taylor St', '94133'],
-    ['555 California Street, Suite 100', '555 California Street', null],
-    ['555 California Street Suite 100', '555 California Street', null],
-    ['100 Main St Apt 4B', '100 Main St', null],
-    ['100 Main St Ste. 300', '100 Main St', null],
-    ['100 Main St #200', '100 Main St', null],
-    ['555 California St San Francisco CA 94104', '555 California St', '94104'],
-    ['600 W 7th St Los Angeles California United States', '600 W 7th St', null],
+    ['5500 S Figueroa St, Los Angeles, CA 90037', '5500 S Figueroa St', '90037', [], 'LA'],
+    ['2739 Taylor St, San Francisco, CA 94133, USA', '2739 Taylor St', '94133', [], 'SF'],
+    ['555 California Street, Suite 100', '555 California Street', null, ['100'], null],
+    ['555 California Street Suite 100', '555 California Street', null, ['100'], null],
+    ['100 Main St Apt 4B', '100 Main St', null, ['4b'], null],
+    ['100 Main St Ste. 300', '100 Main St', null, ['300'], null],
+    ['100 Main St #200', '100 Main St', null, ['200'], null],
+    ['555 California St San Francisco CA 94104', '555 California St', '94104', [], 'SF'],
+    ['600 W 7th St Los Angeles California United States', '600 W 7th St', null, [], 'LA'],
     // City and state words come off the end only, and only while a street is left.
-    ['555 California', '555 California', null],
-    ['100 S Los Angeles', '100 S Los Angeles', null],
-    ['100 S Los Angeles St', '100 S Los Angeles St', null],
-    ['California', 'California', null],
-    ['90037', '90037', null],
+    ['555 California', '555 California', null, [], null],
+    ['100 S Los Angeles', '100 S Los Angeles', null, [], null],
+    ['100 S Los Angeles St', '100 S Los Angeles St', null, [], null],
+    ['California', 'California', null, [], null],
+    ['90037', '90037', null, [], null],
+    // A ZIP before or after the place words, without commas.
+    ['5500 S Figueroa St Los Angeles CA 90037 USA', '5500 S Figueroa St', '90037', [], 'LA'],
+    ['5500 S Figueroa St Los Angeles CA 90037 United States', '5500 S Figueroa St', '90037', [], 'LA'],
+    ['5500 S Figueroa St 90037 Los Angeles', '5500 S Figueroa St', '90037', [], 'LA'],
+    // The unit first, or an empty first part.
+    ['Suite 100, 555 California St', '555 California St', null, ['100'], null],
+    [',5500 S Figueroa St', '5500 S Figueroa St', null, [], null],
+    // A unit keeps the letter after its number, and is one word however it's written.
+    ['3450 3rd St #2 D', '3450 3rd St', null, ['2d'], null],
+    ['3450 3rd St, Unit 2-D', '3450 3rd St', null, ['2d'], null],
+    ['1 Main St #0003', '1 Main St', null, ['3'], null],
+    // Every unit typed counts.
+    ['Suite 100 1 Main St #1', '1 Main St', null, ['100', '1'], null],
+    // A part after a dash, but not a range typed with spaces.
+    ['350 RHODE ISLAND - NORTH', '350 RHODE ISLAND', null, ['n'], null],
+    ['80 Pier- M&R Bldg', '80 Pier', null, ['mrbldg'], null],
+    ['336 - 344 Mason St', '336 - 344 Mason St', null, [], null],
+    // Only the two cities count as a city typed.
+    ['1 Market St, LA', '1 Market St', null, [], 'LA'],
+    ['1 Market St, S.F.', '1 Market St', null, [], 'SF'],
+    ['100 Main St, South San Francisco', '100 Main St', null, [], null],
   ];
-  for (const [input, text, zip] of cases) assert.deepEqual(cleanQuery(input), { text, zip }, input);
+  for (const [input, text, zip, units, city] of cases) assert.deepEqual(cleanQuery(input), { text, zip, units, city }, input);
 });
 
 // ---- half-typed words and spelled-out numbers (F7) -----------------------------------
@@ -428,4 +450,225 @@ test('a different street type never opens a building, even when "St" reads as Sa
   assert.equal(target('553 S St Andrews Pl'), 'la:467170845786');
   assert.equal(target('553 S St Andrews'), 'la:467170845786');
   assert.equal(target('600 St Paul Ave'), 'la:482679841787');
+});
+
+// ---- units, parts after a dash, typed cities (second search review) -----------
+
+const ids = (hits, n = hits.length) => new Set(hits.slice(0, n).map((d) => d.id));
+
+test('a unit typed must be the record\'s own unit', { skip }, () => {
+  // SF lists 3450 3RD ST as three records, one per unit: #1 D, #2 A and #2 B.
+  for (const [q, id] of [
+    ['3450 3rd St #1 D', 'sf:5211/031'], ['3450 3rd St #2 A', 'sf:5211/032'], ['3450 3rd St Unit 2B', 'sf:5211/033'],
+    ['3450 3rd St, #2 A', 'sf:5211/032'], ['70 Pier #12', 'sf:4052/001-A'],
+  ]) assert.equal(target(q), id, q);
+  // A unit none of them has lists them instead of opening a different unit.
+  for (const q of ['3450 3rd St #2 D', '3450 3rd St #1 A', '3450 3rd St #3 A', '3450 3rd St #9 B', '3450 3rd St Unit 7 B']) {
+    const r = search(q, index, lookup);
+    assert.equal(r.target, null, q);
+    assert.deepEqual(ids(r.hits, 3), new Set(['sf:5211/031', 'sf:5211/032', 'sf:5211/033']), q);
+  }
+  for (const q of ['70 Pier #1', '70 Pier #2', '70 Pier #3']) assert.equal(target(q), null, q);
+  // No unit typed: three records have that address.
+  const all = search('3450 3rd St', index, lookup);
+  assert.equal(all.addressMatches, 3);
+  assert.equal(searchStatus(all, true), '3 records have that address. Pick one:');
+  // A suite in a building listed without units still opens the building.
+  assert.equal(target('5500 S Figueroa St Suite 100'), 'la:476102819647');
+  // SF lists sf:0690/017 and sf:0690/018 at one address, the second with unit #1.
+  // With two units typed, a record with either one fits.
+  const twoUnits = search(`Suite 100, ${lookup.byId.get('sf:0690/018').address}`, index, lookup);
+  assert.equal(twoUnits.target?.id, 'sf:0690/018');
+  assert.equal(twoUnits.addressMatches, 1);
+  // A unit neither has opens neither: the record without a unit isn't a fit
+  // when the other record at its address has one.
+  const street = lookup.byId.get('sf:0690/017').address;
+  for (const unit of ['#2', 'Unit 7', 'Apt 3']) {
+    const r = search(`${street} ${unit}`, index, lookup);
+    assert.equal(r.target, null, unit);
+    assert.deepEqual(ids(r.hits, 2), new Set(['sf:0690/017', 'sf:0690/018']), unit);
+  }
+  assert.equal(target(`${street} #1`), 'sf:0690/018');
+  assert.equal(target(street), null); // two records have that address
+});
+
+test('records split by a part after a dash are listed together', { skip }, () => {
+  // 350 RHODE ISLAND ST - SOUTH (named "350 Rhode Island Street") and 350 RHODE ISLAND - NORTH.
+  for (const q of ['350 Rhode Island St', '350 Rhode Island Street', '350 Rhode Island', '350 Rhode Island St, North']) {
+    const r = search(q, index, lookup);
+    assert.equal(r.target, null, q);
+    assert.equal(r.addressMatches, 2, q);
+    assert.deepEqual(ids(r.hits, 2), new Set(['sf:3957/002', 'sf:3957/004']), q);
+  }
+  // The part typed picks one.
+  assert.equal(target('350 Rhode Island St - North'), 'sf:3957/002');
+  assert.equal(target('350 Rhode Island North'), 'sf:3957/002');
+  assert.equal(target('350 Rhode Island St - South'), 'sf:3957/004');
+  assert.equal(target('45 Pier - Shed B'), 'sf:9900/045-B');
+  assert.equal(search('45 Pier', index, lookup).addressMatches, 3);
+  assert.equal(search('80 Pier', index, lookup).addressMatches, 2);
+});
+
+test('every record with a unit or a part after a dash opens when typed as listed', { skip }, () => {
+  const split = docs.filter((d) => /^\d/.test(d.address) && /#|\bSTE\b|\s-|-\s/i.test(d.address));
+  assert.ok(split.length >= 12, `${split.length} records`);
+  for (const d of split) {
+    const r = search(d.address, index, lookup);
+    // Unless several records share it (sf:0690/017 and sf:0690/018, one with unit #1 and one without).
+    assert.ok(r.target?.id === d.id || (!r.target && r.addressMatches > 1 && ids(r.hits).has(d.id)), d.address);
+  }
+});
+
+test('a city typed is never the other city\'s building', { skip }, () => {
+  for (const q of [
+    '1 Market St, Los Angeles', '1 Market St Los Angeles CA', '2739 Taylor St, Los Angeles, CA', '2739 Taylor St, Los Angeles, CA 94133',
+    '18019 Ventura Blvd, San Francisco, CA', '600 N Broadway, San Francisco, CA',
+  ]) {
+    const r = search(q, index, lookup);
+    assert.equal(r.target, null, q);
+    assert.ok(r.hits.length > 0, `${q} lists the other city's building`);
+    assert.equal(searchStatus(r, true), `No exact match in ${r.city === 'LA' ? 'Los Angeles' : 'San Francisco'}. Closest matches:`, q);
+  }
+  // The building's own city still opens it, and picks between the cities.
+  for (const [q, id] of [
+    ['5500 S Figueroa St, Los Angeles, CA 90037', 'la:476102819647'], ['2739 Taylor St, San Francisco, CA 94133', 'sf:0012/001'],
+    ['644 Broadway, Los Angeles', 'la:485152838940'], ['644 Broadway, San Francisco', 'sf:0146/006'],
+    // With the city typed, SF's Pacific Ave no longer holds back LA's 2300 S PACIFIC AVE.
+    ['2300 Pacific Ave, Los Angeles', 'la:474237721733'],
+  ]) assert.equal(target(q), id, q);
+  // A covered address with the other city's name never opens a building outside
+  // that city (it may open that city's own record, as for 644 Broadway), and
+  // with its own city it opens as before.
+  const city = { LA: 'Los Angeles', SF: 'San Francisco' };
+  for (const d of docs.filter((x, i) => i % 20 === 0 && /^\d/.test(x.address))) {
+    const other = d.city === 'LA' ? 'SF' : 'LA';
+    const opened = search(`${d.address}, ${city[other]}, CA`, index, lookup).target;
+    assert.ok(!opened || opened.city === other, d.address);
+    const own = search(`${d.address}, ${city[d.city]}, CA`, index, lookup);
+    assert.ok(own.target?.id === d.id || own.addressMatches > 1, d.address);
+  }
+});
+
+test('a house number and a lone direction or letter never opens a building', { skip }, () => {
+  for (const q of ['1430 E', '1430 Ea', '1430 Eas', '6310 W', '6310 We', '6310 Wes', '508 E', '508 Ea', '1240 W', '901 E', '720 E', '6400 W', '3995 East']) {
+    assert.equal(target(q), null, q);
+  }
+  // "900 M" may be the start of 900 MARIN ST (SF), not only LA's 900 E M ST.
+  assert.equal(target('900 M'), null);
+  // Both buildings at 1430 stay listed; a street after the direction opens one.
+  assert.ok(ids(search('1430 E', index, lookup).hits).has('la:486737830606'));
+  assert.equal(target('720 E E St'), 'la:484560740860');
+  assert.equal(target('6400 West Blvd'), 'la:460154815801');
+  assert.equal(target('900 E M St'), 'la:485057745333');
+});
+
+test('a same-city twin with a directional is counted as the same address', { skip }, () => {
+  // LA lists 1461 FRANCISCO ST and 1461 W FRANCISCO ST; SF also has a Francisco St.
+  const r = search('1461 Francisco St', index, lookup);
+  assert.equal(r.target, null);
+  assert.equal(r.addressMatches, 2);
+  assert.deepEqual(ids(r.hits, 2), new Set(['la:469926768570', 'la:470617768911']));
+  assert.equal(target('1461 W Francisco St'), 'la:470617768911');
+});
+
+test('a half-typed word keeps the building in the list', { skip }, () => {
+  for (const [q, id] of [
+    // "Av" and "Lane" also read as typed (AVALON, AVION, LANEWOOD), and one letter can start an ordinal.
+    ['10803 Av', 'la:481125799862'], ['6040 W Av', 'la:442626802574'], ['7075 Lane', 'la:457564858821'],
+    ['8888 W T', 'la:445041849307'], ['2790 N', 'sf:2540/009'],
+  ]) {
+    assert.ok(ids(search(q, index, lookup).hits).has(id), q);
+    assert.equal(target(q), null, q);
+  }
+  // Every keystroke of "250 Fourth St" lists 250 4TH ST, also while "Four
+  // Maritime Plaza" (250 CLAY ST) has every word typed so far.
+  const full = '250 Fourth St';
+  for (let n = full.indexOf(' ') + 2; n <= full.length; n++) {
+    const q = full.slice(0, n);
+    if (!q.endsWith(' ')) assert.ok(ids(search(q, index, lookup).hits).has('sf:3733/008'), q);
+  }
+});
+
+test('compound spelled-out ordinals become numbers', () => {
+  for (const [spelled, words] of [
+    ['Twenty-third Street', ['23rd', 'st']], ['twenty third', ['23rd']], ['Thirty-Ninth', ['39th']], ['ninety-first', ['91st']],
+    ['Twenty-Second', ['22nd']], ['One Hundred Third Street', ['103rd', 'st']], ['one hundred and third', ['103rd']],
+    ['One Hundred Eleventh', ['111th']], ['One Hundredth', ['100th']], ['Two Hundred Fortieth Street', ['240th', 'st']],
+    ['Two Hundred Fifty-Ninth', ['259th']],
+    // Not ordinals: a number, and "twenty tenth".
+    ['Twenty Four', ['20', '4']], ['twenty tenth', ['20', '10th']],
+  ]) assert.deepEqual(terms(spelled), words, spelled);
+});
+
+test('compound spelled-out ordinals find the same buildings as the digits', { skip }, () => {
+  for (const [spelled, digits] of [
+    ['Twenty-third Street', '23rd Street'], ['Thirty-ninth Street', '39th Street'],
+    ['One Hundred Third Street', '103rd Street'], ['Two Hundred Fortieth Street', '240th Street'],
+  ]) {
+    const want = search(digits, index, lookup).hits.map((d) => d.id);
+    assert.ok(want.length > 0, digits);
+    assert.deepEqual(search(spelled, index, lookup).hits.map((d) => d.id), want, spelled);
+  }
+});
+
+test('SF\'s zero-padded street numbers match the usual spelling', { skip }, () => {
+  assert.equal(normalizeTerm('09TH'), '9th');
+  assert.equal(normalizeTerm('03rd'), '3rd');
+  // Only ordinals: parcel and ID numbers keep their zeros.
+  assert.equal(normalizeTerm('0012'), '0012');
+  for (const [q, id] of [
+    ['104 9th St', 'sf:3509/043'], ['104 Ninth St', 'sf:3509/043'], ['104 09th St', 'sf:3509/043'],
+    ['1150 3rd St', 'sf:8711/026B'], ['1509-1519 3rd St', 'sf:8721/029'],
+  ]) assert.equal(target(q), id, q);
+  // Typed the way SF writes it, every keystroke keeps it in the list ("1509-1519 03").
+  const full = '1509-1519 03RD ST';
+  for (let n = full.indexOf(' ') + 2; n <= full.length; n++) {
+    const q = full.slice(0, n);
+    if (!q.endsWith(' ')) assert.ok(ids(search(q, index, lookup).hits).has('sf:8721/029'), q);
+  }
+});
+
+test('pasted addresses without commas, or with the unit first, open the building', { skip }, () => {
+  for (const [q, id] of [
+    ['5500 S Figueroa St Los Angeles CA 90037 USA', 'la:476102819647'], ['5500 S Figueroa St Los Angeles CA 90037 United States', 'la:476102819647'],
+    ['5500 S Figueroa St 90037 Los Angeles', 'la:476102819647'], [',5500 S Figueroa St', 'la:476102819647'],
+    ['Suite 100, 555 California St', 'sf:0259/026'],
+  ]) assert.equal(target(q), id, q);
+});
+
+test('spelled-out house numbers match digits', { skip }, () => {
+  assert.equal(normalizeTerm('One'), '1');
+  assert.equal(normalizeTerm('twenty'), '20');
+  for (const [q, id] of [
+    // SF lists the address as "One Post Street", and building names such as "Four Maritime Plaza".
+    ['1 Post St', 'sf:0311/015'], ['One Post Street', 'sf:0311/015'], ['1 Maritime Plaza', 'sf:0204/021'],
+    ['4 Maritime Plaza', 'sf:0204/023-A'], ['One Market St', 'sf:3713/006'],
+  ]) assert.equal(target(q), id, q);
+  // "Seven to Nine Maritime Plaza" (444 BATTERY ST) is not 7 Maritime Plaza.
+  assert.equal(target('7 Maritime Plaza'), null);
+});
+
+test('LA addresses with a lost character (U+FFFD) open when typed without it', { skip }, () => {
+  const marked = docs.filter((d) => d.address.includes('\uFFFD'));
+  assert.equal(marked.length, 4);
+  for (const d of marked) {
+    const r = search(d.address.replace(/\uFFFD/g, ''), index, lookup);
+    // Two of them are one address, listed twice.
+    assert.ok(r.target?.id === d.id || (r.addressMatches > 1 && ids(r.hits, r.addressMatches).has(d.id)), d.id);
+  }
+});
+
+test('after Enter, the status line says why the list is showing', { skip }, () => {
+  const status = (q) => searchStatus(search(q, index, lookup), true);
+  // The city may list the address written another way, so never "no exact match" alone.
+  for (const q of ['4028 West Blvd', '1234 W Wilshire Blvd', '3450 3rd St #2 D']) {
+    assert.equal(status(q), 'No single exact match for that address. Closest matches:', q);
+  }
+  assert.equal(status('1 Market St, Los Angeles'), 'No exact match in Los Angeles. Closest matches:');
+  assert.equal(status('18019 Ventura Blvd, San Francisco, CA'), 'No exact match in San Francisco. Closest matches:');
+  assert.equal(status('644 Broadway'), 'Both LA and SF list a building at that address. Pick one:');
+  assert.equal(status('1461 Francisco St'), '2 records have that address. Pick one:');
+  assert.match(status('zzqx vvwk'), /^Nothing matched all of those words/);
+  // While typing it counts the matches.
+  assert.equal(searchStatus(search('5500 S Figueroa St', index, lookup), false), '1 match');
 });

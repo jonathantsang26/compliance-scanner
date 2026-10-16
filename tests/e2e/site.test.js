@@ -47,6 +47,11 @@ after(async () => {
 const PHONE = { width: 390, height: 844, isMobile: true, hasTouch: true, deviceScaleFactor: 2 };
 const DESKTOP = { width: 1280, height: 900 };
 
+// A phone up to 640px, a plain browser window above.
+function viewportAt(width) {
+  return width <= 640 ? { width, height: 800, isMobile: true, hasTouch: true, deviceScaleFactor: 2 } : { width, height: 900 };
+}
+
 async function open(viewport, path) {
   const page = await browser.newPage();
   await page.setViewport(viewport);
@@ -192,6 +197,43 @@ test('the independence line shows even when meta.json fails or JavaScript is off
   }
 });
 
+test('every page leaves space under the header and above the footer', { skip: !CHROME && 'no Chrome' }, async () => {
+  for (const [path, ready] of PAGES) {
+    const page = await open(DESKTOP, path);
+    await page.waitForSelector(ready);
+    const m = await page.evaluate(() => {
+      const main = document.querySelector('main');
+      const style = getComputedStyle(main);
+      const header = document.querySelector('.site-header').getBoundingClientRect();
+      return { top: style.paddingTop, bottom: style.paddingBottom, gap: main.firstElementChild.getBoundingClientRect().top - header.bottom };
+    });
+    assert.equal(m.top, '24px', path);
+    assert.equal(m.bottom, '48px', path);
+    assert.ok(m.gap >= 24, `${path}: the content starts ${m.gap}px under the header`);
+    await page.close();
+  }
+});
+
+// The hint is the search box's only visible label, so it must fit whole on a small phone.
+test('320px: the search box hint is not cut off', { skip: !CHROME && 'no Chrome' }, async () => {
+  const page = await open(viewportAt(320), '');
+  const m = await page.evaluate(() => {
+    const q = document.getElementById('q');
+    const style = getComputedStyle(q);
+    const ctx = document.createElement('canvas').getContext('2d');
+    ctx.font = `${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
+    return {
+      need: ctx.measureText(q.placeholder).width,
+      room: q.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight),
+      label: document.querySelector('label[for="q"]').textContent,
+    };
+  });
+  assert.ok(m.need <= m.room, `the hint needs ${Math.round(m.need)}px and the box has ${m.room}px`);
+  // Screen readers still hear the full description.
+  assert.match(m.label, /building name/);
+  await page.close();
+});
+
 test('Enter pressed before the building list loads keeps its message', { skip: !CHROME && 'no Chrome' }, async () => {
   const page = await browser.newPage();
   await page.setViewport(PHONE);
@@ -202,9 +244,9 @@ test('Enter pressed before the building list loads keeps its message', { skip: !
   await page.type('#q', '4028 West Blvd');
   await page.keyboard.press('Enter');
   await page.waitForSelector('body[data-search-ready="true"]', { timeout: 10000 });
-  await page.waitForFunction(() => /No exact match for that address/.test(document.getElementById('search-status').textContent));
+  await page.waitForFunction(() => /No (single )?exact match for that address/.test(document.getElementById('search-status').textContent));
   await new Promise((resolve) => setTimeout(resolve, 500));
-  assert.match(await page.$eval('#search-status', (s) => s.textContent), /No exact match for that address/);
+  assert.match(await page.$eval('#search-status', (s) => s.textContent), /No (single )?exact match for that address/);
   await page.close();
 });
 
@@ -240,7 +282,7 @@ for (const [name, viewport] of [['phone', PHONE], ['desktop', DESKTOP]]) {
     for (const query of ['4028 West Blvd', '1411 S Highland Ave', '141 N Highland Ave', '55 Market St']) {
       await retype(page, query);
       await page.keyboard.press('Enter');
-      await page.waitForFunction(() => /No exact match for that address/.test(document.getElementById('search-status').textContent));
+      await page.waitForFunction(() => /No (single )?exact match for that address/.test(document.getElementById('search-status').textContent));
       assert.equal(new URL(page.url()).pathname, '/', query);
       assert.ok((await page.$$eval('#results li', (lis) => lis.length)) > 0, `${query} lists the closest matches`);
     }
@@ -297,9 +339,8 @@ test('half-typed words keep the building in the list', { skip: !CHROME && 'no Ch
 // The filters start folded on phones and the other checks run at 1280px, so
 // open the panel and pick the longest size-band label at widths in between.
 test('the filters stay inside their panel at every width', { skip: !CHROME && 'no Chrome' }, async () => {
-  for (const width of [320, 420, 500, 580, 700, 790, 900, 1024, 1280]) {
-    const viewport = width <= 640 ? { width, height: 900, isMobile: true, hasTouch: true, deviceScaleFactor: 2 } : { width, height: 900 };
-    const page = await open(viewport, 'prospects.html');
+  for (const width of [320, 414, 420, 500, 580, 700, 790, 900, 1024, 1280]) {
+    const page = await open(viewportAt(width), 'prospects.html');
     await page.waitForSelector('body[data-prospects-ready="true"]');
     await page.$eval('#filter-panel', (d) => { d.open = true; });
     const longest = await page.$$eval('select[name="band"] option', (os) => os.reduce((a, o) => (o.text.length > a.text.length ? o : a)).value);
@@ -325,9 +366,8 @@ test('the filters stay inside their panel at every width', { skip: !CHROME && 'n
         assert.ok(!overlap, `${width}px: the ${b.name} select covers the ${o.name} select`);
       }
     }
-    // The page itself; between phone and desktop widths the wide table may scroll inside its own box.
-    const [scroll, client] = await page.evaluate(() => [document.documentElement.scrollWidth, document.documentElement.clientWidth]);
-    assert.ok(scroll <= client + 1, `${width}px: the page is ${scroll}px wide in a ${client}px window`);
+    // Neither the page nor the prospect table, which is cards up to 1040px.
+    await noSidewaysScroll(page, `${width}px prospects`);
     await page.close();
   }
 });
@@ -352,12 +392,24 @@ test('"Show more" goes away once every row is shown', { skip: !CHROME && 'no Chr
   await page.close();
 });
 
-for (const width of [320, 360, 390]) {
+// Every row of the prospect list, so a long name anywhere in the data counts.
+async function showAllRows(page) {
+  await page.evaluate(() => {
+    const more = document.getElementById('more');
+    while (!more.hidden) more.click();
+  });
+}
+
+// Phones, the widths in between (the prospect table is cards up to 1040px, the
+// history table up to 700px), and desktop. The prospect list with city-owned
+// buildings shown is checked with every row on screen.
+for (const width of [320, 360, 390, 641, 701, 768, 900, 1024, 1280]) {
   test(`${width}px: no page or table scrolls sideways`, { skip: !CHROME && 'no Chrome' }, async () => {
-    for (const [path, ready] of PAGES) {
-      const page = await open({ width, height: 800, isMobile: true, hasTouch: true, deviceScaleFactor: 2 }, path);
+    for (const [path, ready] of [...PAGES, ['prospects.html?cityOwned=1', 'body[data-prospects-ready="true"]']]) {
+      const page = await open(viewportAt(width), path);
       await page.waitForSelector(ready);
       if (path === '') await searchFor(page, '5500 S Figueroa');
+      if (path.includes('cityOwned')) await showAllRows(page);
       await noSidewaysScroll(page, `${width}px ${path || 'index'}`);
       await page.close();
     }
@@ -416,6 +468,85 @@ for (const [name, viewport] of [['phone', PHONE], ['desktop', DESKTOP]]) {
     await page.close();
   });
 }
+
+// A size band that only city-owned buildings have (LA lists private buildings from 20,000 sqft).
+const ownedOnlyBand = [...new Set(prospects.map((r) => r.size_band))]
+  .find((band) => prospects.filter((r) => r.size_band === band).every((r) => r.city_owned));
+
+test('a size band with only city-owned buildings says why the list is empty', {
+  skip: (!CHROME && 'no Chrome') || (!ownedOnlyBand && 'no city-owned-only size band in the data'),
+}, async () => {
+  const page = await open(DESKTOP, `prospects.html?band=${encodeURIComponent(ownedOnlyBand)}`);
+  await page.waitForSelector('body[data-prospects-ready="true"]');
+  const owned = filterProspects(prospects, { ...DEFAULT_FILTERS, band: ownedOnlyBand, cityOwned: true }).length;
+  assert.equal(await shownCount(page), 0);
+  const note = await page.$eval('#owned-note', (p) => p.textContent);
+  assert.match(note, new RegExp(`^${owned.toLocaleString('en-US')} city-owned buildings? match`));
+  assert.match(note, /tick "Show city-owned buildings"/);
+  // A disabled button looks disabled.
+  const button = () => page.$eval('#download', (b) => ({ disabled: b.disabled, opacity: getComputedStyle(b).opacity, cursor: getComputedStyle(b).cursor }));
+  const off = await button();
+  assert.ok(off.disabled && Number(off.opacity) < 1 && off.cursor === 'not-allowed', JSON.stringify(off));
+  // Ticking the box lists them; the note goes and the button comes back.
+  await page.click('input[name="cityOwned"]');
+  assert.equal(await shownCount(page), owned);
+  assert.equal(await page.$eval('#owned-note', (p) => p.textContent), '');
+  assert.deepEqual(await button(), { disabled: false, opacity: '1', cursor: 'pointer' });
+  await page.close();
+});
+
+// The longest size-band label, note included, fits in the closed select (Chrome's arrow takes 20px).
+for (const width of [320, 390, 900, 1280]) {
+  test(`${width}px: the chosen size band is not cut off in the closed select`, {
+    skip: !CHROME && 'no Chrome',
+  }, async () => {
+    const page = await open(viewportAt(width), 'prospects.html');
+    await page.waitForSelector('body[data-prospects-ready="true"]');
+    await page.$eval('#filter-panel', (d) => { d.open = true; });
+    const longest = await page.$$eval('select[name="band"] option', (os) => os.reduce((a, o) => (o.text.length > a.text.length ? o : a)).value);
+    await page.select('select[name="band"]', longest);
+    const m = await page.$eval('select[name="band"]', (s) => {
+      const style = getComputedStyle(s);
+      const ctx = document.createElement('canvas').getContext('2d');
+      ctx.font = `${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
+      return {
+        text: s.selectedOptions[0].text,
+        need: ctx.measureText(s.selectedOptions[0].text).width,
+        room: s.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight) - 20,
+      };
+    });
+    assert.ok(m.need <= m.room, `"${m.text}" needs ${Math.round(m.need)}px; the select has ${Math.round(m.room)}px`);
+    await page.close();
+  });
+}
+
+// After a roll-forward the page names the new years with no edit: here meta.json
+// is served with other report years.
+test('the prospect page takes its years from meta.json', { skip: !CHROME && 'no Chrome' }, async () => {
+  const meta = JSON.parse(readFileSync(join(SITE, 'data/meta.json'), 'utf8'));
+  for (const [la, sf, lede, history] of [
+    [2026, 2026, /out of compliance for 2026\./, 'History (2024 to 2026)'],
+    [2026, 2025, /out of compliance for 2026 \(LA\) and 2025 \(SF\)\./, 'History (2023 to 2026)'],
+  ]) {
+    const body = JSON.stringify({ ...meta, cities: { LA: { ...meta.cities.LA, report_year: la }, SF: { ...meta.cities.SF, report_year: sf } } });
+    const page = await browser.newPage();
+    await page.setViewport(DESKTOP);
+    await page.setRequestInterception(true);
+    page.on('request', (req) => (req.url().includes('data/meta.json')
+      ? req.respond({ status: 200, contentType: 'application/json', body }) : req.continue()));
+    await page.goto(`${base}prospects.html`, { waitUntil: 'networkidle0' });
+    await page.waitForSelector('body[data-prospects-ready="true"]');
+    const text = await page.$eval('#lede', (p) => p.textContent);
+    assert.match(text, lede);
+    assert.match(text, /COMPLIED for 2025 but NOT COMPLIED for 2026 \(lapsed\)/);
+    assert.equal(await page.$eval('select[name="history"]', (s) => s.parentElement.firstChild.textContent), history);
+    await page.close();
+  }
+  // Without JavaScript the page names no year, so it can't go stale.
+  const noJs = await openQuiet(DESKTOP, 'prospects.html', { javascript: false });
+  assert.doesNotMatch(await noJs.page.$eval('#lede', (p) => p.textContent), /\b20\d\d\b/);
+  await noJs.page.close();
+});
 
 test('no page shows "not filed" wording, penalty language or dollar amounts', { skip: !CHROME && 'no Chrome' }, async () => {
   const forbidden = /not filed|didn'?t file|did not file|penalt|\bfines?\b|\$\s?\d/i;

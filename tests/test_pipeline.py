@@ -12,7 +12,7 @@ from scanner import counts as raw_counts
 from scanner.build_db import checkpoint
 from scanner.config import DB_PATH, EXPECTED_PATH
 from scanner.snapshot import latest_dir, load_latest
-from tests.conftest import requires_pinned
+from tests.conftest import requires_pinned, requires_spec_snapshot
 
 needs_snapshot = pytest.mark.skipif(
     latest_dir("LA") is None or latest_dir("SF") is None or not DB_PATH.exists(),
@@ -52,7 +52,7 @@ def test_la_segments_partition_non_compliers(db):
 
 
 @needs_snapshot
-@requires_pinned
+@requires_spec_snapshot
 def test_5500_s_figueroa(db):
     row = db.execute("SELECT address, segment, data_on_file FROM buildings WHERE id='la:476102819647'").fetchone()
     assert row == ("5500 S FIGUEROA ST", "chronic", 0)
@@ -103,29 +103,54 @@ def test_city_owned_follows_the_size_band_suffix(db):
 
 
 @needs_snapshot
+def test_city_only_size_bands_are_all_city_owned(db):
+    """Structural (DRIFT.md item 3): LA uses the two bands under 20,000 sqft only for city buildings."""
+    (bad,) = db.execute(
+        "SELECT count(*) FROM buildings WHERE city='LA' AND NOT city_owned "
+        "AND size_band IN ('7,500 to 14,999 sqft', '15,000 to 19,999 sqft')").fetchone()
+    (owned,) = db.execute("SELECT count(*) FROM buildings WHERE city='LA' AND city_owned").fetchone()
+    assert bad == 0 and owned > 0
+
+
+@needs_snapshot
+def test_same_address_lists_point_both_ways(db):
+    """A match is not transitive, but it is mutual: each record listed lists this one back."""
+    lists = {bid: json.loads(ids) for bid, ids in db.execute(
+        "SELECT id, same_address_ids FROM buildings WHERE same_address_ids IS NOT NULL")}
+    for bid, ids in lists.items():
+        for other in ids:
+            assert bid in lists.get(other, []), (bid, other)
+
+
+@needs_snapshot
 def test_no_published_filer_name_looks_personal():
     """Every name that reaches site/data passed the person check, so none carries a trust or owner marker."""
     import re
 
     from scanner.config import SITE
     marker = re.compile(r"\b(TR|TRS|TRUSTEES?|ET AL|CO-?OWNERS?|C/O)\b|(LIVING|FAMILY|REVOCABLE) TRUST", re.I)
+    # Failures name building IDs only: CI logs of a public repo are public too.
+    marked, leaked = set(), set()
     for shard in (SITE / "data" / "b").glob("*.json"):
         for b in json.loads(shard.read_text()).values():
             names = [f["filed_by"] for f in b["filings"] if f["filed_by"]] + [b.get("last_filed_by")]
-            for name in filter(None, names):
-                assert not marker.search(name), (b["id"], name)
-            assert all(f["filed_by"] is None for f in b["filings"] if f.get("filed_by_note") == "withheld")
-    rows = json.loads((SITE / "data" / "prospects.json").read_text())
-    for r in rows:
-        if r["last_filed_by"]:
-            assert not marker.search(r["last_filed_by"]), (r["id"], r["last_filed_by"])
+            if any(marker.search(name) for name in filter(None, names)):
+                marked.add(b["id"])
+            if any(f["filed_by"] is not None for f in b["filings"] if f.get("filed_by_note") == "withheld"):
+                leaked.add(b["id"])
+    for r in json.loads((SITE / "data" / "prospects.json").read_text()):
+        if r["last_filed_by"] and marker.search(r["last_filed_by"]):
+            marked.add(r["id"])
+    assert not marked, f"{len(marked)} buildings publish a filer value with a trust or owner marker, e.g. {sorted(marked)[:10]}"
+    assert not leaked, f"{len(leaked)} buildings publish a value marked withheld, e.g. {sorted(leaked)[:10]}"
 
 
 @needs_snapshot
 def test_raw_filer_names_stay_out_of_the_published_files():
     from scanner.config import SITE
     for path in [SITE / "data" / "prospects.json", *(SITE / "data" / "b").glob("*.json")]:
-        assert "filed_by_raw" not in path.read_text(), path.name
+        leaked = "filed_by_raw" in path.read_text()  # outside the assert, so a failure can't print the text
+        assert not leaked, path.name
 
 
 @needs_snapshot

@@ -18,9 +18,11 @@ PACIFIC = ZoneInfo("America/Los_Angeles")
 # The year the scanner reports on, per city. Pinned on purpose: when a city
 # starts publishing a new year, its first rows can make almost every building
 # look non-compliant. Rolling forward is the founder's call, so the build only
-# warns when it sees a newer year. To roll forward: change the year here, add
-# that year's entries to YEAR_NOTES and SF_DUE_DATE_SENTENCES, then re-pin
-# scanner/expected.json from a fresh `python -m scanner.counts`.
+# warns when it sees a newer year. To roll forward: change the year here and
+# add that year's entries to YEAR_NOTES and SF_DUE_DATE_SENTENCES. Then run
+# `python -m scanner.counts`: it prints the new year's counts and stops. Set
+# report_year and pinned_rows_updated_at in scanner/expected.json as it shows,
+# copy its got column into counts, then rerun it: every check should say MATCH.
 REPORT_YEAR = {"LA": 2025, "SF": 2025}
 
 # What each city's report year means, with the source that says so

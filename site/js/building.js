@@ -104,7 +104,7 @@ function flags(b) {
     const label = b.city === 'LA' ? `COMPLIED for ${b.report_year}` : `'${b.report_year} - Complied'`;
     list.push(h('li', { class: 'flag' },
       h('strong', {}, 'Same address. '),
-      `${formatInt(s.others)} other record${s.others === 1 ? '' : 's'} at this address in the city's data (${formatInt(s.complied)} listed as ${label}). Check which one the owner means: `,
+      `${formatInt(s.others)} other record${s.others === 1 ? '' : 's'} at this street address in the city's data, sometimes written a little differently or with a unit (${formatInt(s.complied)} listed as ${label}). Check which one the owner means: `,
       s.ids.flatMap((id, i) => [i ? ', ' : null, h('a', { href: buildingUrl(id) }, `${b.city === 'LA' ? 'ID' : 'parcel'} ${id.slice(3)}`)]),
       '.'));
   }

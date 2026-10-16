@@ -7,12 +7,14 @@ import pytest
 from scanner.build_db import build_la, build_sf, sf_source_url
 from scanner.build_db import add_same_address
 from scanner.classify import (
+    KNOWN_FILERS,
     UnknownLabel,
     audit_status,
     filer_name,
     history_segment,
     la_city_owned,
     la_size_band,
+    looks_personal,
     sf_city_owned,
     sf_size_band,
     sf_status,
@@ -173,9 +175,58 @@ def test_unknown_city_owned_suffix_stops_the_build():
     ("Roe, Jordan F", (None, "withheld")),
     ("Business Enterprises Centre LLC and Roe, Sam Co Tr Roe Trust", (None, "withheld")),
     ("Tenant is Royal-Pedic Mattress Mfg. / Keleco, LLC is building owner", (None, "withheld")),
+    # People's names that a company word or suffix used to let through (made-up names).
+    ("Avery and Blair Roe Family LP", (None, "withheld")),
+    ("Avery and Blair Roe", (None, "withheld")),
+    ("Quinn and Riley ROE LLC", (None, "withheld")),
+    ("Q and R Roe LLC", (None, "withheld")),
+    ("Q&R Roe Partnership LP", (None, "withheld")),
+    ("Roe Family Partnership", (None, "withheld")),
+    ("Roe Family Limited Partnership", (None, "withheld")),
+    ("Roe fmily properties", (None, "withheld")),
+    ("Series 2, Elm Enterprises, Roe Family Series LP", (None, "withheld")),
+    ("Jordan Q. Roe, Inc", (None, "withheld")),
+    ("Law Offices of Jordan Q Roe", (None, "withheld")),
+    ("Roe, Jordan and QRS Equities LP", (None, "withheld")),
+    ("Jordan Roe", (None, "withheld")),
+    # The same shapes in capitals, as LADBS sometimes sends them.
+    ("QUINN AND RILEY ROE LLC", (None, "withheld")),
+    ("Quinn And Riley Roe LLC", (None, "withheld")),
+    ("JORDAN Q. ROE, INC", (None, "withheld")),
+    ("AVERY AND BLAIR ROE", (None, "withheld")),
+    ("ROE FAMILY LP", (None, "withheld")),
+    # Company names of the same rough shape stay published.
+    ("Harbor Family Health Center", ("Harbor Family Health Center", None)),
+    ("Roe & Doe Associates", ("Roe & Doe Associates", None)),
+    ("Delta V Business Systems", ("Delta V Business Systems", None)),
+    ("Sunset Vine Holdings, LLC", ("Sunset Vine Holdings, LLC", None)),
+    ("Bay Efficiency, LLC", ("Bay Efficiency, LLC", None)),
+    ("Smart and Final", ("Smart and Final", None)),
+    ("ROE & DOE ASSOCIATES", ("ROE & DOE ASSOCIATES", None)),
+    ("SUNSET VINE HOLDINGS, LLC", ("SUNSET VINE HOLDINGS, LLC", None)),
 ])
 def test_filer_name(raw, expected):
     assert filer_name(raw) == expected
+
+
+def test_page_never_shows_a_name_it_withholds_in_another_year():
+    # The bare name is withheld; the longer value with "Family LP" must be too.
+    rows = [
+        la_row(2023, "COMPLIED", organization="Avery and Blair Roe"),
+        la_row(2024, "COMPLIED", organization="Avery and Blair Roe Family LP"),
+        la_row(2025, "NOT COMPLIED"),
+    ]
+    [building], filings = build_la(rows, 2025)
+    assert [f["filed_by"] for f in filings] == [None, None, None]
+    assert [f["filed_by_note"] for f in filings][:2] == ["withheld", "withheld"]
+    assert building["last_filed_by"] is None and building["last_filed_by_note"] == "withheld"
+
+
+def test_only_hand_checked_institutions_on_the_known_list_look_personal():
+    # The known list skips the person check, so a person added to it would publish.
+    # An institution named after someone has to be added here on purpose too.
+    flagged = {k for k in KNOWN_FILERS if any(looks_personal(f(k)) for f in (str, str.title, str.upper))}
+    assert flagged == {"the j paul getty trust", "the j. paul getty trust"}
 
 
 def test_withheld_filer_never_reaches_the_building_record():

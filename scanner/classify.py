@@ -204,7 +204,9 @@ def to_int(value) -> int | None:
 # The spec's guardrail is "no owner or personal data", so a name is published
 # only when it reads as an organization. Anything else is withheld. Withholding
 # a company by mistake costs little; publishing a person by mistake breaks a
-# hard rule.
+# hard rule. Firms named after a founder ("Given Surname Properties, Inc") still
+# show: no rule can tell them from a one-person company, so that is the
+# founder's call (README, decisions).
 
 FILER_PLACEHOLDERS = {"unknown", "n/a", "na", "none", "-", ".", "my organization", "owner", "test", "tbd"}
 
@@ -238,12 +240,66 @@ _ORG_WORDS = re.compile(
     re.I,
 )
 
+# Shapes of people's names that a company word or suffix does not cancel:
+# "Given and Given Surname LLC", "G and J Surname LLC", "Surname Family LP",
+# "Given M. Surname, Inc", "Surname, Given and ... LP". They also cover the
+# bare form ("Given and Given Surname"), so a page can't withhold one year's
+# value and show the same people in a longer value for another year.
+_NAME_WORD = r"[A-Za-z][A-Za-z'\-]+"
+_LEGAL_WORD = r"(?:LLC|L\.?L\.?C\.?|INC\.?|INCORPORATED|CORP\.?|CORPORATION|LP|L\.?P\.?|LLP|LTD\.?|PLLC|LIMITED)"
+_TWO_PEOPLE = re.compile(rf"\b({_NAME_WORD})\s+(?:and|&)\s+({_NAME_WORD})\s+({_NAME_WORD})", re.I)
+_INITIALS_JOINED = re.compile(
+    rf"(?<![A-Za-z.])[A-Z]\.?\s*(?:and|&)\s*[A-Z]\.?\s+({_NAME_WORD})(?=\s*,?\s*(?:{_LEGAL_WORD}|PARTNERSHIP|PARTNERS|FAMILY)\b|\s*$)",
+    re.I)
+# "Family" names a family unless it is part of a service name ("Family Health Center").
+_FAMILY = re.compile(
+    rf"\b({_NAME_WORD})\s+FA?MILY\b(?!\s+(?:HEALTH|CENTERS?|CENTRES?|HOUSING|SERVICES|CARE|GUIDANCE|CLINIC|MEDICAL|DOLLAR|RESOURCES?)\b)",
+    re.I)
+_NOT_A_FAMILY_NAME = {"the", "a", "our", "first", "la", "child", "and"}
+_MIDDLE_INITIAL = re.compile(rf"\b([A-Z][a-z]+)\s+([A-Z])\.?\s+([A-Z][a-z][A-Za-z'\-]*)")
+_LAST_FIRST = re.compile(rf"^\s*({_NAME_WORD})\s*,\s*({_NAME_WORD})\b")
+
+
+def _company_word(word: str) -> bool:
+    return bool(_ORG_WORDS.fullmatch(word) or re.fullmatch(_LEGAL_WORD, word, re.I) or re.fullmatch(r"[IVX]+", word))
+
+
+def _person_shape(name: str) -> bool:
+    # The middle-initial shape reads capitals, so a value sent in capitals is checked as Title Case too.
+    return _shape(name) or (name.isupper() and _shape(name.title()))
+
+
+def _shape(name: str) -> bool:
+    for m in _TWO_PEOPLE.finditer(name):
+        if m.group(1).lower() != "the" and not any(_company_word(w) for w in m.groups()):
+            return True
+    for m in _INITIALS_JOINED.finditer(name):
+        if not _company_word(m.group(1)):
+            return True
+    for m in _FAMILY.finditer(name):
+        if m.group(1).lower() not in _NOT_A_FAMILY_NAME and not _company_word(m.group(1)):
+            return True
+    for m in _MIDDLE_INITIAL.finditer(name):
+        given, initial, surname = m.groups()
+        if initial not in "IVX" and not _company_word(given) and not _company_word(surname):
+            return True
+    m = _LAST_FIRST.match(name)
+    return bool(m) and not _company_word(m.group(1)) and not _company_word(m.group(2))
+
+
+def looks_personal(name: str) -> bool:
+    """True when a value carries a sign of a person that no company word cancels."""
+    return bool(_PERSON_MARKERS.search(name)) or _person_shape(name)
+
+
 # Frequent LA filers whose names carry no company word (checked by hand on
-# 2026-10-15 against the 2016-2025 data). Matched case-insensitively.
+# 2026-10-15 against the 2016-2025 data). Matched case-insensitively. A bare
+# "Given Surname" is left out even when it is a firm's short name: in an
+# outreach line it would read as a person.
 KNOWN_FILERS = {
     "bay efficiency", "ece_cola_gsd", "ece_ecom_energy", "aum", "servidyne", "landmark", "kroger", "cbre",
     "wegowise", "wegowise by appfolio", "labbc", "cushman & wakefield", "cushman && wakefield", "scg",
-    "charles dunn", "prologis", "lbpm", "berglas & garfield", "conservice", "transwestern", "aimco",
+    "prologis", "lbpm", "berglas & garfield", "conservice", "transwestern", "aimco",
     "smart and final", "dws", "link logistics", "jll", "gbworks", "target", "invesco", "cedars-sinai",
     "vallarta supermarkets", "rcmi", "kennedy wilson", "home depot", "the home depot", "greystone", "macy's",
     "kidder matthews", "gid", "costco wholesale", "a community of friends", "salsbury industries", "ssp",
@@ -271,7 +327,7 @@ def filer_name(value) -> tuple[str | None, str | None]:
     # Free text such as "Tenant is X / Y is building owner" is not a name.
     if " is " in f" {lowered} ":
         return None, "withheld"
-    if _PERSON_MARKERS.search(name):
+    if looks_personal(name):
         return None, "withheld"
     if _WEAK_PERSON_MARKERS.search(name) and not _ENTITY_SUFFIX.search(name):
         return None, "withheld"

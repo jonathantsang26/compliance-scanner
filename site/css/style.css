@@ -86,10 +86,11 @@ body {
 a { color: var(--accent); }
 a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
 
-.wrap { max-width: 1040px; margin: 0 auto; padding: 0 var(--gutter); }
+/* Side padding only, so main keeps its own top and bottom padding. */
+.wrap { max-width: 1040px; margin: 0 auto; padding-inline: var(--gutter); }
 
 .site-header { border-bottom: 1px solid var(--border); background: var(--surface); }
-.site-header .wrap { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 56px; flex-wrap: wrap; }
+.site-header .wrap { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 56px; flex-wrap: wrap; padding-block: 8px; }
 .brand { font-weight: 700; text-decoration: none; color: var(--text); }
 .site-header nav { display: flex; gap: 16px; }
 .site-header nav a { text-decoration: none; font-weight: 500; }
@@ -116,6 +117,7 @@ button, .button {
   background: var(--accent); color: var(--accent-text); cursor: pointer; text-decoration: none; display: inline-block;
 }
 button.secondary, .button.secondary { background: transparent; color: var(--accent); }
+button:disabled { opacity: 0.55; cursor: not-allowed; }
 #search-status { min-height: 1.5em; color: var(--muted); font-size: 0.9rem; margin: 4px 0 8px; }
 .results { list-style: none; padding: 0; margin: 0 0 24px; display: grid; gap: 8px; }
 .result {
@@ -182,15 +184,30 @@ caption { text-align: left; padding: 10px 14px; color: var(--muted); font-size: 
 th, td { text-align: left; padding: 9px 14px; border-top: 1px solid var(--border); vertical-align: top; }
 th { font-size: 0.8rem; color: var(--muted); font-weight: 600; white-space: nowrap; }
 td { font-variant-numeric: tabular-nums; }
+/* The history headers may wrap, so the table is under 600px wide at its narrowest. */
+table.history th { white-space: normal; }
 
-/* Phone width: each table row becomes a small card, so nothing scrolls sideways. */
 @media (max-width: 640px) {
-  table.stack thead, table.history thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); }
-  table.stack tr, table.history tr { display: block; border-top: 1px solid var(--border); padding: 8px 0; }
-  table.stack td, table.history td { display: grid; grid-template-columns: minmax(6.5em, 9.5em) minmax(0, 1fr); gap: 8px; border: 0; padding: 4px 14px; }
-  table.stack td::before, table.history td::before { content: attr(data-label); color: var(--muted); font-size: 0.8rem; }
   .search { flex-direction: column; }
   .search button { width: 100%; }
+}
+
+/* Up to 700px each history row becomes a small card, so nothing scrolls sideways. */
+@media (max-width: 700px) {
+  table.history thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); }
+  table.history tr { display: block; border-top: 1px solid var(--border); padding: 8px 0; }
+  table.history td { display: grid; grid-template-columns: minmax(6.5em, 9.5em) minmax(0, 1fr); gap: 8px; border: 0; padding: 4px 14px; }
+  table.history td::before { content: attr(data-label); color: var(--muted); font-size: 0.8rem; }
+}
+
+/* The prospect table has seven columns and is about 970px wide at its
+   narrowest, so it only shows at the page's full width. Below that its rows
+   are the same cards. */
+@media (max-width: 1040px) {
+  table.stack thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); }
+  table.stack tr { display: block; border-top: 1px solid var(--border); padding: 8px 0; }
+  table.stack td { display: grid; grid-template-columns: minmax(6.5em, 9.5em) minmax(0, 1fr); gap: 8px; border: 0; padding: 4px 14px; }
+  table.stack td::before { content: attr(data-label); color: var(--muted); font-size: 0.8rem; }
 }
 
 /* prospects */
@@ -202,27 +219,42 @@ td { font-variant-numeric: tabular-nums; }
 .filters { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 16px; margin: 0 0 12px; }
 .filters label { display: grid; gap: 4px; font-size: 0.85rem; color: var(--muted); }
 /* A select is as wide as its longest option unless told otherwise; this keeps
-   each one inside its column. A long size-band label is cut off when closed. */
+   each one inside its column. A label too long for it is cut off when closed. */
 .filters select {
   font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--field-border); border-radius: 8px; padding: 8px;
   width: 100%; min-width: 0; max-width: 100%; text-overflow: ellipsis;
+}
+/* The size-band labels are the longest, so that select gets two columns once
+   the form has two (2 x 170px + the 12px gap). */
+.filters { container-type: inline-size; }
+@container (min-width: 352px) {
+  .filters .band { grid-column: span 2; }
 }
 .filters .checks { display: grid; gap: 6px; align-content: start; }
 .filters .checks label { display: flex; gap: 8px; align-items: center; color: var(--text); font-size: 0.9rem; }
 .toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin: 0 0 12px; }
 .count { font-weight: 600; }
+/* Empty unless every match is city-owned; it stays in the page so screen readers hear it. */
+.owned-note { margin: -4px 0 12px; }
+.owned-note:empty { margin: 0; }
 .notice { background: var(--warn-bg); color: var(--warn-text); border-radius: var(--radius); padding: 10px 14px; margin: 0 0 12px; font-size: 0.925rem; }
 .more { margin: 12px 0; text-align: center; }
 .line-cell { min-width: 14em; max-width: 26em; }
 /* Long URLs and IDs may break anywhere, so they never push the page sideways. */
 .outreach-line, .line-cell, td a, .outreach-actions a { overflow-wrap: anywhere; }
 
-/* Phone width, after the rules above so these win: the card's value column may shrink. */
-@media (max-width: 640px) {
+/* Card width, after the rules above so these win: the card's value column may shrink. */
+@media (max-width: 1040px) {
   .line-cell { min-width: 0; max-width: none; }
   .prospects .status-chip { min-width: 0; }
   /* The outreach line is long, so its label sits above it and the line gets the card's full width. */
   .prospects td.wide { grid-template-columns: minmax(0, 1fr); gap: 2px; }
+}
+
+/* Phone width: less padding around and inside the filters gives the selects room for long labels. */
+@media (max-width: 640px) {
+  .filters { padding: 12px; }
+  .filters select { padding-inline: 6px; }
 }
 
 .error { background: var(--bad-bg); color: var(--bad-text); padding: 12px 14px; border-radius: var(--radius); }

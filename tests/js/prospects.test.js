@@ -120,7 +120,7 @@ test('CSV tells a withheld name apart from "no entity listed"', { skip }, () => 
   assert.equal(withheld.length, rows.filter((r) => r.last_filed_by_note === 'withheld').length);
   assert.ok(withheld.length > 0, 'the data has withheld names to check');
   for (const r of withheld) {
-    assert.equal(r.last_filed_by, '', r.id);
+    assert.ok(r.last_filed_by === '', r.id); // not assert.equal: its failure prints the value
     assert.match(r.last_filed_year, /^\d{4}$/, r.id);
   }
   // A COMPLIED year with no entity listed has an empty note.
@@ -150,17 +150,17 @@ test('size bands say when only city-owned or only SF buildings have them', () =>
   ];
   assert.deepEqual(bandOptions(fake), [
     ['100,000+ sqft', '100,000+ sqft'],
-    ['15,000 to 19,999 sqft', '15,000 to 19,999 sqft (city-owned only)'],
+    ['15,000 to 19,999 sqft', '15,000 to 19,999 sqft (city-owned)'],
     ['10,000 to 19,999 sqft', '10,000 to 19,999 sqft (SF only)'],
-    ['7,500 to 14,999 sqft', '7,500 to 14,999 sqft (city-owned only)'],
-    ['Under 10,000 sqft', 'Under 10,000 sqft (SF, city-owned only)'],
+    ['7,500 to 14,999 sqft', '7,500 to 14,999 sqft (city-owned)'],
+    ['Under 10,000 sqft', 'Under 10,000 sqft (SF, city-owned)'],
   ]);
 });
 
 test('size-band labels match the built data', { skip }, () => {
   for (const [band, label] of bandOptions(rows)) {
     const inBand = rows.filter((r) => r.size_band === band);
-    assert.equal(label.includes('city-owned only'), inBand.every((r) => r.city_owned), band);
+    assert.equal(label.includes('city-owned)'), inBand.every((r) => r.city_owned), band);
     assert.equal(/\(SF(,| only)/.test(label), inBand.every((r) => r.city === 'SF'), band);
   }
 });

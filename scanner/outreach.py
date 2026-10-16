@@ -10,6 +10,8 @@ Rules these templates follow (SPEC.md Guardrails):
 - No penalty amounts or fine language. No personal names: a filer name goes
   into a line only when scanner.classify.filer_name lets it be published.
 - City-owned buildings get no line; they are excluded from outreach.
+- An address that still has a comma inside after cleaning gets no line until
+  someone checks it by hand.
 The product only writes these lines. It never sends anything.
 """
 
@@ -19,9 +21,11 @@ import sys
 
 from .config import DB_PATH, LA_OUTREACH_APPROVED, SF_DUE_DATE_CONFIRMED, SF_DUE_DATE_SENTENCES
 
-# Shown on public pages, so it names no internal file and no unconfirmed date.
+# Shown on public pages, so they name no internal file and no unconfirmed date.
 LA_HELD_REASON = "LA outreach lines are held until the founder signs off on what LADBS's program year {year} covers."
 CITY_OWNED_REASON = "City-owned building: kept out of outreach."
+ADDRESS_CHECK_REASON = ("No line yet: the city's address for this building has a comma in it, so it may list "
+                        "several addresses. Check the address by hand before using it.")
 
 
 def clean_address(address: str) -> str:
@@ -61,6 +65,9 @@ def outreach_for(b: dict, as_of_label: str, la_approved: bool = LA_OUTREACH_APPR
     source_url = filing["source_url"]
     if b.get("city_owned"):
         return {"line": None, "held_reason": CITY_OWNED_REASON, "source_url": source_url}
+    # '1234 1240, 1250,1254, W. WILSHIRE BLVD' would read as garbled copy.
+    if "," in clean_address(b["address"]):
+        return {"line": None, "held_reason": ADDRESS_CHECK_REASON, "source_url": source_url}
     if b["city"] == "LA":
         if not la_approved:
             reason = LA_HELD_REASON.format(year=year)
@@ -94,7 +101,8 @@ def main(argv=None) -> int:
                 continue
             print(f"--- {city} {segment}")
             for b in picks:
-                print(outreach_for(b, label, la_approved=True)["line"])
+                o = outreach_for(b, label, la_approved=True)
+                print(o["line"] or f"(held: {o['held_reason']})")
             print()
     return 0
 

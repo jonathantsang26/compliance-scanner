@@ -293,8 +293,8 @@ def export(out_dir=OUT, extra_files=None) -> dict:
     for name, data in extra_files.items():
         write_json(tmp / name, data)
     write_json(tmp / "meta.json", meta)
-    # Move the old build aside before the new one takes its place, so the
-    # folder is never missing, then delete the old one.
+    # Move the old build aside, rename the new one into place, then delete the
+    # old one. The folder is missing only for an instant between the two renames.
     old = out_dir.with_name(out_dir.name + ".old")
     if old.exists():
         shutil.rmtree(old)

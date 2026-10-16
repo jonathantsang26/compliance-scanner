@@ -8,7 +8,15 @@ import pytest
 
 from scanner.config import DB_PATH, SF_DUE_DATE_SENTENCES, SITE
 from scanner.export import building_records, city_meta
-from scanner.outreach import CITY_OWNED_REASON, LA_HELD_REASON, la_line, outreach_for, sf_line
+from scanner.outreach import (
+    ADDRESS_CHECK_REASON,
+    CITY_OWNED_REASON,
+    LA_HELD_REASON,
+    clean_address,
+    la_line,
+    outreach_for,
+    sf_line,
+)
 
 FORBIDDEN = re.compile(r"not filed|didn'?t file|did not file|failed to file|never filed|penalt|\bfine[sd]?\b|\$", re.I)
 LA_URL = "https://data.lacity.org/resource/9yda-i4ya.json?building_id=476102819647&program_year=2025"
@@ -52,16 +60,39 @@ def test_sf_lines_quote_the_label():
 
 
 def test_sf_due_date_sentence_only_for_a_year_with_a_known_date():
-    line = sf_line("1 X ST", "2026 - Violation - Did Not Report", "x", "did_not_report", 2026, SF_URL, due_date_confirmed=True)
-    assert "May 1" not in line
+    year = max(SF_DUE_DATE_SENTENCES) + 1  # a year with no sentence yet, even after a roll-forward
+    line = sf_line("1 X ST", f"{year} - Violation - Did Not Report", "x", "did_not_report", year, SF_URL, due_date_confirmed=True)
+    assert "SF Environment says" not in line and "due" not in line
+
+
+def prospect(city, address, url):
+    status = "NOT COMPLIED" if city == "LA" else "2025 - Violation - Did Not Report"
+    return {"city": city, "address": address, "segment": "chronic" if city == "LA" else "did_not_report",
+            "report_year": 2025, "city_owned": False, "last_filed_by": None, "last_filed_year": None,
+            "filings": [{"year": 2025, "status_raw": status, "source_url": url}]}
+
+
+@pytest.mark.parametrize("city, url", [("LA", LA_URL), ("SF", SF_URL)])
+def test_an_address_with_a_comma_inside_is_held_for_a_hand_check(city, url):
+    # A list of house numbers would read as garbled copy: "lists 12 14, 16,18, W. LANTERN BLVD as ...".
+    o = outreach_for(prospect(city, "12 14, 16,18, W. LANTERN BLVD", url), "October 11, 2026",
+                     la_approved=True, sf_due_date_confirmed=True)
+    assert o == {"line": None, "held_reason": ADDRESS_CHECK_REASON, "source_url": url}
+    # A comma the city left at the end is only trimmed.
+    o = outreach_for(prospect(city, "12 Lantern Blvd,", url), "October 11, 2026", la_approved=True)
+    assert o["held_reason"] is None and " 12 Lantern Blvd as " in o["line"]
 
 
 needs_db = pytest.mark.skipif(not DB_PATH.exists(), reason="no database yet")
 
 
+def has_inner_comma(address):
+    return "," in clean_address(address)
+
+
 def test_held_notes_name_no_internal_file_or_unconfirmed_date():
     # These notes appear on public pages. The LA meaning and due date wait for the founder's sign-off.
-    for note in (LA_HELD_REASON.format(year=2025), CITY_OWNED_REASON):
+    for note in (LA_HELD_REASON.format(year=2025), CITY_OWNED_REASON, ADDRESS_CHECK_REASON):
         assert not re.search(r"docs/|\.md\b|\bdue\b|June", note), note
         assert not FORBIDDEN.search(note), note
 
@@ -83,6 +114,9 @@ def test_every_real_line_follows_the_guardrails(records_and_meta):
         label = meta[b["city"]]["as_of_label"]
         o = outreach_for(b, label, la_approved=True, sf_due_date_confirmed=True)
         line = o["line"]
+        if has_inner_comma(b["address"]):
+            assert line is None and o["held_reason"] == ADDRESS_CHECK_REASON, b["id"]
+            continue
         assert f"(as of {label})" in line
         assert line.endswith(f" Source: {o['source_url']}")
         assert not FORBIDDEN.search(line.split(" Source: ")[0]), line
@@ -97,8 +131,9 @@ def test_lines_never_name_a_withheld_filer(records_and_meta):
     records, meta = records_and_meta
     for b in records.values():
         if b["segment"] == "lapsed" and b["city"] == "LA" and b["last_filed_by_note"] == "withheld":
-            line = outreach_for(b, "x", la_approved=True)["line"]
-            assert ", filed by" not in line, line
+            line = outreach_for(b, "x", la_approved=True)["line"] or ""
+            named = ", filed by" in line  # a failure names the building, never the line (public CI logs)
+            assert not named, b["id"]
 
 
 @needs_db
@@ -117,7 +152,8 @@ def test_la_lines_are_held_until_sign_off(records_and_meta):
     for b in records.values():
         if b["segment"] and b["city"] == "LA" and not b["city_owned"]:
             o = outreach_for(b, meta["LA"]["as_of_label"], la_approved=False)
-            assert o["line"] is None and "signs off" in o["held_reason"]
+            reason = ADDRESS_CHECK_REASON if has_inner_comma(b["address"]) else LA_HELD_REASON.format(year=b["report_year"])
+            assert o["line"] is None and o["held_reason"] == reason, b["id"]
 
 
 @pytest.mark.skipif(not (SITE / "data" / "prospects.json").exists(), reason="site not built")

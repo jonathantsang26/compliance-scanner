@@ -6,8 +6,10 @@ import { asOfLine, copyText, external, h, loadMeta, loadProspects, renderFooter,
 
 const PAGE = 100;
 const els = {
+  lede: document.getElementById('lede'),
   form: document.getElementById('filters'),
   count: document.getElementById('count'),
+  ownedNote: document.getElementById('owned-note'),
   notices: document.getElementById('notices'),
   asof: document.getElementById('asof'),
   table: document.getElementById('prospect-rows'),
@@ -25,15 +27,32 @@ function option(value, label) {
   return h('option', { value }, label);
 }
 
+// The years come from each city's report year in meta.json, so moving a city
+// to a new year (scanner/config.py) needs no edit here. The page's own text
+// names no year, for when the script or the data does not load.
+function ledeText() {
+  const la = meta.cities.LA.report_year;
+  const sf = meta.cities.SF.report_year;
+  const years = la === sf ? String(la) : `${la} (LA) and ${sf} (SF)`;
+  return `Buildings each city lists as out of compliance for ${years}. Priority A: LA buildings listed as COMPLIED for ${la - 1} but NOT COMPLIED for ${la} (lapsed), and every SF violation. Priority B: other LA non-compliers. Within each priority, larger buildings come first.`;
+}
+
+// Lapsed, chronic and other look back over the report year and the two before it.
+function historyLabel() {
+  const years = [meta.cities.LA.report_year, meta.cities.SF.report_year];
+  return `History (${Math.min(...years) - 2} to ${Math.max(...years)})`;
+}
+
 function buildFilterControls() {
-  const select = (name, label, options) => h('label', {}, label,
+  const select = (name, label, options, cls = null) => h('label', { class: cls }, label,
     h('select', { name }, options.map(([v, l]) => option(v, l))));
   els.form.replaceChildren(
     select('city', 'City', [['all', 'Both cities'], ['LA', 'Los Angeles'], ['SF', 'San Francisco']]),
     select('segment', 'Segment', [['all', 'All segments'],
       ...['lapsed', 'chronic', 'other', 'did_not_report', 'insufficient_data'].map((s) => [s, SEGMENT_LABELS[s]])]),
-    select('history', 'History (2023 to 2025)', [['all', 'Any history'], ['lapsed', 'Lapsed'], ['other', 'Other non-compliant'], ['chronic', 'Chronic']]),
-    select('band', 'Size band', [['all', 'All sizes'], ...bandOptions(all)]),
+    select('history', historyLabel(), [['all', 'Any history'], ['lapsed', 'Lapsed'], ['other', 'Other non-compliant'], ['chronic', 'Chronic']]),
+    // "band": the longest labels, so this select gets two columns (style.css).
+    select('band', 'Size band', [['all', 'All sizes'], ...bandOptions(all)], 'band'),
     select('dataOnFile', 'LA: data on file', [['any', 'Any'], ['yes', 'Yes (LA only)'], ['no', 'No (LA only)']]),
     select('auditOverdue', 'SF: audit overdue', [['any', 'Any'], ['yes', 'Yes (SF only)'], ['no', 'No (SF only)']]),
     h('div', { class: 'checks' },
@@ -78,6 +97,8 @@ function outreachCell(r) {
   if (!r.outreach_line) {
     let why = '—';
     if (r.city_owned) why = 'City-owned: kept out of outreach';
+    // Mirrors outreach.clean_address: a comma left inside may mean several addresses.
+    else if (r.address.trim().replace(/[,;:]+$/, '').trim().includes(',')) why = 'Address needs a hand check';
     else if (r.city === 'LA') why = 'Held for founder sign-off';
     return h('span', { class: 'muted small' }, why);
   }
@@ -138,6 +159,12 @@ function apply() {
   els.count.dataset.count = String(current.length);
   els.download.textContent = `Download CSV (${formatInt(current.length)} rows)`;
   els.download.disabled = current.length === 0;
+  // Some size bands have only city-owned buildings, which the list leaves out
+  // unless asked. Say so, instead of a bare "0 buildings".
+  const owned = (current.length || filters.cityOwned) ? 0 : filterProspects(all, { ...filters, cityOwned: true }).length;
+  els.ownedNote.textContent = owned
+    ? `${formatInt(owned)} city-owned building${owned === 1 ? ' matches' : 's match'} these filters. City-owned buildings are kept out of the prospect list; tick "Show city-owned buildings" to see them.`
+    : '';
 }
 
 function notices() {
@@ -174,6 +201,7 @@ async function init() {
   try {
     meta = await loadMeta();
     renderFooter(meta);
+    els.lede.textContent = ledeText();
     els.asof.replaceChildren(asOfLine(meta.cities.LA), h('br'), asOfLine(meta.cities.SF));
     all = await loadProspects();
   } catch (err) {

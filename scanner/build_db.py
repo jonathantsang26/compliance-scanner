@@ -3,7 +3,9 @@
     python -m scanner.build_db
 
 Reads the newest raw snapshot for each city (scanner.pull writes them) and
-rebuilds data/scanner.db from scratch, then prints the segment counts.
+rebuilds data/scanner.db from scratch, then prints the segment counts. It
+stops without replacing the database if LA's city-owned label looks broken
+(see city_owned_problems).
 """
 
 import json
@@ -321,25 +323,112 @@ def build_sf(rows: list[dict], report_year: int) -> tuple[list[dict], list[dict]
     return buildings, filings, audits
 
 
-def address_key(city: str, address: str) -> tuple[str, str]:
-    return city, re.sub(r"\s+", " ", address.upper()).strip().rstrip(".,;:").strip()
+# LA covers city buildings from 7,500 sqft and private ones from 20,000 sqft,
+# so these two bands only ever carry the city-owned suffix (DRIFT.md item 3).
+LA_CITY_ONLY_BANDS = ("7,500 to 14,999 sqft", "15,000 to 19,999 sqft")
+
+
+def city_owned_problems(la_buildings: list[dict]) -> list[str]:
+    """Why LA's city-owned label can't be trusted on this snapshot (empty when it can).
+
+    The label comes only from the size-band suffix, and scanner.counts reads
+    the same suffix. So if LADBS dropped it, every count would still agree
+    while city buildings turned into prospects. Two facts that hold in every
+    year of the data catch that.
+    """
+    problems = []
+    unlabeled = [b for b in la_buildings if b["size_band"] in LA_CITY_ONLY_BANDS and not b["city_owned"]]
+    if unlabeled:
+        examples = ", ".join(f"{b['id']} ({b['size_band_raw']!r})" for b in unlabeled[:3])
+        problems.append(
+            f"{len(unlabeled):,} LA buildings in the {' or '.join(LA_CITY_ONLY_BANDS)} band have no city-owned "
+            f"suffix, e.g. {examples}. LADBS uses those bands only for city buildings (DRIFT.md item 3).")
+    if not any(b["city_owned"] for b in la_buildings):
+        problems.append("No LA building has the city-owned size-band suffix.")
+    return problems
+
+
+# Same-address matching. These only compare addresses; the address shown
+# everywhere stays the city's own text.
+DIRECTIONALS = {"N", "S", "E", "W"}
+STREET_TYPES = {"ST", "AVE", "BLVD", "DR", "RD", "WAY", "PL", "LN", "CT", "CIR", "TER", "PKWY", "HWY", "PLZ"}
+SPELLED_STREET_TYPES = {"STREET": "ST", "AVENUE": "AVE", "AV": "AVE", "BOULEVARD": "BLVD", "DRIVE": "DR", "ROAD": "RD"}
+_UNIT = re.compile(r"\s*(#|\b(UNIT|STE|SUITE|APT)\b).*$")
+_SF_SIDE = re.compile(r"\s+-\s*(NORTH|SOUTH|EAST|WEST)$")  # '350 RHODE ISLAND ST - SOUTH'
+
+
+def base_address(address: str) -> str:
+    """The address without a unit or an SF-style ' - NORTH' suffix: '3450 3rd St #2 A' -> '3450 3RD ST'."""
+    text = re.sub(r"\s+", " ", address.upper().replace(".", "")).strip(" ,;:")
+    text = _UNIT.sub("", text).strip(" ,;:")
+    return _SF_SIDE.sub("", text).strip(" ,;:")
+
+
+def address_parts(address: str) -> tuple[str, str | None, str | None]:
+    """(house number and street name, directional, street type) of the base address.
+
+    '11150 W SANTA MONICA BLVD' -> ('11150 SANTA MONICA', 'W', 'BLVD'). Only a
+    lone N/S/E/W right after the house number counts as a directional, so
+    'WEST BLVD' and 'CAHUENGA BLVD WEST' stay street names.
+    """
+    words = base_address(address).split()
+    directional = street_type = None
+    if len(words) >= 3 and words[0][0].isdigit() and words[1] in DIRECTIONALS:
+        directional = words.pop(1)
+    last = SPELLED_STREET_TYPES.get(words[-1], words[-1]) if words else None
+    if len(words) >= 3 and last in STREET_TYPES:  # a street name must be left
+        street_type = last
+        words.pop()
+    return " ".join(words), directional, street_type
+
+
+def zip5(postal_code) -> str | None:
+    """'94118' or 'CA 94118' -> '94118'."""
+    found = re.search(r"\d{5}", str(postal_code or ""))
+    return found.group(0) if found else None
+
+
+def agree(a, b) -> bool:
+    """The same value, or one side doesn't give it."""
+    return a == b or a is None or b is None
+
+
+def has_street(street: str) -> bool:
+    """A house number and a street word. Pier numbers ('THE EMBARCADERO #0001'), a
+    unit alone, or a street cut short ('100 STE MARIE AVE' -> '100') don't group."""
+    words = street.split()
+    return len(words) >= 2 and words[0][0].isdigit()
 
 
 def add_same_address(buildings: list[dict]) -> None:
     """Flag records that share an address with other records listed for the report year.
 
     An owner who looks up "865 MARKET ST" may find a compliant parcel next to
-    the one we list (DRIFT.md), so these rows deserve a second look before outreach.
+    the one we list (DRIFT.md item 14), so these rows deserve a second look
+    before outreach. Two records in a city share an address when the house
+    number and street name match, the unit and SF's ' - NORTH' suffix are left
+    out, and the directional, the street type and the ZIP each agree or are
+    missing on one side. So '6222 W WILSHIRE BLVD' matches '6222 WILSHIRE BLVD',
+    but never '6222 E WILSHIRE BLVD'. That isn't transitive (both match the
+    plain one), so each record gets its own list.
     """
-    groups = defaultdict(list)
+    listed = [b for b in buildings if b["report_status"] is not None]
+    parts = {b["id"]: (*address_parts(b["address"]), zip5(b.get("postal_code"))) for b in listed}
+    by_street = defaultdict(list)
+    for b in listed:
+        by_street[(b["city"], parts[b["id"]][0])].append(b)
     for b in buildings:
-        if b["report_status"] is not None:
-            groups[address_key(b["city"], b["address"])].append(b)
-    for b in buildings:
-        others = [o for o in groups.get(address_key(b["city"], b["address"]), []) if o["id"] != b["id"]]
-        b["same_address_others"] = len(others) if b["report_status"] is not None else 0
-        b["same_address_complied"] = sum(1 for o in others if o["report_status"] == "complied") if b["report_status"] is not None else 0
-        b["same_address_ids"] = json.dumps(sorted(o["id"] for o in others)) if others and b["report_status"] is not None else None
+        others = []
+        if b["report_status"] is not None and has_street(parts[b["id"]][0]):
+            street, directional, street_type, zip_code = parts[b["id"]]
+            others = [
+                o for o in by_street[(b["city"], street)]
+                if o["id"] != b["id"] and agree(directional, parts[o["id"]][1])
+                and agree(street_type, parts[o["id"]][2]) and agree(zip_code, parts[o["id"]][3])
+            ]
+        b["same_address_others"] = len(others)
+        b["same_address_complied"] = sum(1 for o in others if o["report_status"] == "complied")
+        b["same_address_ids"] = json.dumps(sorted(o["id"] for o in others)) if others else None
 
 
 def pull_rows(current: dict[str, str], data_as_of: dict[str, str | None]) -> list[dict]:
@@ -454,10 +543,19 @@ def checkpoint(db_path) -> dict:
 def main(argv=None) -> int:
     la_rows, la_manifest = load_latest("LA")
     sf_rows, sf_manifest = load_latest("SF")
+    expected = raw_counts.load_expected()  # stops on a stale pin before the database is touched
     warn_newer_years("LA", la_rows, "program_year", REPORT_YEAR["LA"])
     warn_newer_years("SF", sf_rows, "benchmark_year", REPORT_YEAR["SF"])
 
     la_buildings, la_filings = build_la(la_rows, REPORT_YEAR["LA"])
+    problems = city_owned_problems(la_buildings)
+    if problems:
+        for problem in problems:
+            print(f"error: {problem}", file=sys.stderr)
+        print(f"error: LADBS has probably changed how it marks city-owned buildings, so {DB_PATH} was not "
+              "replaced. Check building_programclass on the city portal and update classify.la_city_owned "
+              "before building again.", file=sys.stderr)
+        return 1
     sf_buildings, sf_filings, sf_audits = build_sf(sf_rows, REPORT_YEAR["SF"])
     buildings = la_buildings + sf_buildings
     add_same_address(buildings)
@@ -470,9 +568,8 @@ def main(argv=None) -> int:
     got = checkpoint(DB_PATH)
 
     # The same numbers, worked out a second way straight from the raw rows.
-    independent = {**raw_counts.la_counts(la_rows), **raw_counts.sf_counts(sf_rows)}
+    independent = {**raw_counts.la_counts(la_rows, REPORT_YEAR["LA"]), **raw_counts.sf_counts(sf_rows, REPORT_YEAR["SF"])}
     disagree = {k: (got[k], independent[k]) for k in independent if got.get(k) != independent[k]}
-    expected = raw_counts.load_expected()
     results = raw_counts.compare(got, expected["counts"], expected["drift_warn_pct"])
     tally = Counter(r["verdict"] for r in results)
     print(f"\ncross-check with scanner.counts (raw rows): {len(independent) - len(disagree)}/{len(independent)} equal")
