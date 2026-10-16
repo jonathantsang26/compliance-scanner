@@ -184,8 +184,42 @@ test('the independence line shows even when meta.json fails or JavaScript is off
 
     const noJs = await openQuiet(PHONE, path, { javascript: false });
     assert.ok((await footerText(noJs.page)).includes(INDEPENDENT), `${path} without JavaScript`);
+    // Without JavaScript the page says so, instead of "Loading…" forever.
+    const text = await noJs.page.evaluate(() => document.body.innerText);
+    assert.match(text, /needs JavaScript/, `${path} without JavaScript`);
+    assert.doesNotMatch(text, /Loading/, `${path} without JavaScript`);
     await noJs.page.close();
   }
+});
+
+test('Enter pressed before the building list loads keeps its message', { skip: !CHROME && 'no Chrome' }, async () => {
+  const page = await browser.newPage();
+  await page.setViewport(PHONE);
+  await page.setRequestInterception(true);
+  page.on('request', (req) => (req.url().includes('data/search.json')
+    ? setTimeout(() => req.continue(), 1500) : req.continue()));
+  await page.goto(base, { waitUntil: 'domcontentloaded' });
+  await page.type('#q', '4028 West Blvd');
+  await page.keyboard.press('Enter');
+  await page.waitForSelector('body[data-search-ready="true"]', { timeout: 10000 });
+  await page.waitForFunction(() => /No exact match for that address/.test(document.getElementById('search-status').textContent));
+  await new Promise((resolve) => setTimeout(resolve, 500));
+  assert.match(await page.$eval('#search-status', (s) => s.textContent), /No exact match for that address/);
+  await page.close();
+});
+
+test('a city-owned LA building gets no "before sending" note', { skip: !CHROME && 'no Chrome' }, async () => {
+  const owned = await open(PHONE, 'building.html?id=la%3A480754838193');
+  await owned.waitForSelector('body[data-building-id]');
+  const text = await owned.$eval('.outreach', (s) => s.textContent);
+  assert.match(text, /City-owned building: kept out of outreach\./);
+  assert.doesNotMatch(text, /Before sending/);
+  // A private LA building whose line is held still gets the note.
+  const held = await open(PHONE, 'building.html?id=la%3A476102819647');
+  await held.waitForSelector('body[data-building-id]');
+  assert.match(await held.$eval('.outreach', (s) => s.textContent), /Before sending, check this building/);
+  await owned.close();
+  await held.close();
 });
 
 test('search shows an error, not "Loading", when search.json fails', { skip: !CHROME && 'no Chrome' }, async () => {
@@ -210,6 +244,19 @@ for (const [name, viewport] of [['phone', PHONE], ['desktop', DESKTOP]]) {
       assert.equal(new URL(page.url()).pathname, '/', query);
       assert.ok((await page.$$eval('#results li', (lis) => lis.length)) > 0, `${query} lists the closest matches`);
     }
+    // An address in both cities' data lists both: SF's 644 BROADWAY and LA's 644 S BROADWAY.
+    await retype(page, '644 Broadway');
+    await page.keyboard.press('Enter');
+    await page.waitForFunction(() => /Both LA and SF list a building at that address/.test(document.getElementById('search-status').textContent));
+    assert.equal(new URL(page.url()).pathname, '/', '644 Broadway');
+    const both = await page.$$eval('#results li', (lis) => lis.slice(0, 2).map((li) => li.textContent).join(' | '));
+    assert.match(both, /644 BROADWAY/);
+    assert.match(both, /644 S BROADWAY/);
+    // The closest matches include the nearest buildings on the same street.
+    await retype(page, '4028 West Blvd');
+    await page.keyboard.press('Enter');
+    await page.waitForFunction(() => /4026 WEST BLVD/.test(document.getElementById('results').textContent));
+    assert.doesNotMatch(await page.$eval('#results', (r) => r.textContent), /18019 VENTURA BLVD/);
     // No matches at all: say what to try, not that the building isn't covered.
     await retype(page, 'zzqx vvwk');
     await page.keyboard.press('Enter');
@@ -219,7 +266,11 @@ for (const [name, viewport] of [['phone', PHONE], ['desktop', DESKTOP]]) {
   });
 
   test(`${name}: Enter on an exact address opens that building`, { skip: !CHROME && 'no Chrome' }, async () => {
-    for (const [query, id] of [['5500 S Figueroa St', 'la:476102819647'], ['2739 Taylor St, San Francisco, CA 94133', 'sf:0012/001']]) {
+    for (const [query, id] of [
+      ['5500 S Figueroa St', 'la:476102819647'], ['2739 Taylor St, San Francisco, CA 94133', 'sf:0012/001'],
+      // A street named with a direction word, a house-number range, a street named for a street type.
+      ['6400 West Blvd', 'la:460154815801'], ['336-344 Mason Street', 'sf:0315/019'], ['5344 Circle Dr', 'la:426287883657'],
+    ]) {
       const page = await open(viewport, '');
       await page.waitForSelector('body[data-search-ready="true"]');
       await page.type('#q', query);
@@ -229,6 +280,77 @@ for (const [name, viewport] of [['phone', PHONE], ['desktop', DESKTOP]]) {
     }
   });
 }
+
+test('half-typed words keep the building in the list', { skip: !CHROME && 'no Chrome' }, async () => {
+  const page = await open(PHONE, '');
+  await page.waitForSelector('body[data-search-ready="true"]');
+  for (const [query, address] of [
+    ['5500 So', '5500 S FIGUEROA ST'], ['1801 Century Park Ea', '1801 CENTURY PARK EAST'], ['6400 Hollywood Bo', '6400 HOLLYWOOD BLVD'],
+  ]) {
+    await retype(page, query);
+    await page.waitForFunction((a) => document.getElementById('results').textContent.includes(a), { timeout: 5000 }, address);
+    assert.doesNotMatch(await page.$eval('#search-status', (s) => s.textContent), /Nothing matched/, query);
+  }
+  await page.close();
+});
+
+// The filters start folded on phones and the other checks run at 1280px, so
+// open the panel and pick the longest size-band label at widths in between.
+test('the filters stay inside their panel at every width', { skip: !CHROME && 'no Chrome' }, async () => {
+  for (const width of [320, 420, 500, 580, 700, 790, 900, 1024, 1280]) {
+    const viewport = width <= 640 ? { width, height: 900, isMobile: true, hasTouch: true, deviceScaleFactor: 2 } : { width, height: 900 };
+    const page = await open(viewport, 'prospects.html');
+    await page.waitForSelector('body[data-prospects-ready="true"]');
+    await page.$eval('#filter-panel', (d) => { d.open = true; });
+    const longest = await page.$$eval('select[name="band"] option', (os) => os.reduce((a, o) => (o.text.length > a.text.length ? o : a)).value);
+    await page.select('select[name="band"]', longest);
+    const { boxes, panel } = await page.evaluate(() => {
+      const form = document.getElementById('filters');
+      const style = getComputedStyle(form);
+      const f = form.getBoundingClientRect();
+      return {
+        panel: { left: f.left + parseFloat(style.paddingLeft), right: f.right - parseFloat(style.paddingRight) },
+        boxes: [...form.querySelectorAll('select')].map((s) => {
+          const r = s.getBoundingClientRect();
+          const l = s.closest('label').getBoundingClientRect();
+          return { name: s.name, left: r.left, right: r.right, top: r.top, bottom: r.bottom, colLeft: l.left, colRight: l.right };
+        }),
+      };
+    });
+    for (const b of boxes) {
+      assert.ok(b.left >= b.colLeft - 1 && b.right <= b.colRight + 1, `${width}px: the ${b.name} select spills out of its column`);
+      assert.ok(b.left >= panel.left - 1 && b.right <= panel.right + 1, `${width}px: the ${b.name} select passes the panel's edge`);
+      for (const o of boxes) {
+        const overlap = o !== b && b.left < o.right - 1 && o.left < b.right - 1 && b.top < o.bottom - 1 && o.top < b.bottom - 1;
+        assert.ok(!overlap, `${width}px: the ${b.name} select covers the ${o.name} select`);
+      }
+    }
+    // The page itself; between phone and desktop widths the wide table may scroll inside its own box.
+    const [scroll, client] = await page.evaluate(() => [document.documentElement.scrollWidth, document.documentElement.clientWidth]);
+    assert.ok(scroll <= client + 1, `${width}px: the page is ${scroll}px wide in a ${client}px window`);
+    await page.close();
+  }
+});
+
+test('320px: the outreach line gets the full card width', { skip: !CHROME && 'no Chrome' }, async () => {
+  const page = await open({ width: 320, height: 800, isMobile: true, hasTouch: true, deviceScaleFactor: 2 }, 'prospects.html?city=SF');
+  await page.waitForSelector('body[data-prospects-ready="true"]');
+  const { line, card } = await page.$eval('#prospect-rows td.wide .line-cell', (el) => {
+    const td = el.closest('td');
+    const style = getComputedStyle(td);
+    return { line: el.getBoundingClientRect().width, card: td.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight) };
+  });
+  assert.ok(line >= card - 1, `the outreach line is ${line}px wide in a ${card}px card`);
+  await page.close();
+});
+
+test('"Show more" goes away once every row is shown', { skip: !CHROME && 'no Chrome' }, async () => {
+  const page = await open(DESKTOP, 'prospects.html?city=SF&segment=insufficient_data');
+  await page.waitForSelector('body[data-prospects-ready="true"]');
+  assert.ok((await shownCount(page)) < 100);
+  assert.equal(await page.$eval('#more', (b) => getComputedStyle(b).display), 'none');
+  await page.close();
+});
 
 for (const width of [320, 360, 390]) {
   test(`${width}px: no page or table scrolls sideways`, { skip: !CHROME && 'no Chrome' }, async () => {
@@ -276,6 +398,7 @@ for (const [name, viewport] of [['phone', PHONE], ['desktop', DESKTOP]]) {
 
     let csv = await downloadCsv(page);
     assert.equal(csv.records.length, await shownCount(page));
+    assert.ok(csv.header.includes('last_filed_by_note'), 'the CSV marks withheld names');
     for (const r of csv.records) {
       assert.ok(r.as_of, `${r.id} has no as_of`);
       assert.ok(r.source_url.startsWith('https://'), `${r.id} has no source_url`);

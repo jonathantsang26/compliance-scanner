@@ -117,7 +117,8 @@ function row(r) {
       h('span', { class: `status-chip tone-${rawStatusTone(r.status_raw)}` }, r.status_raw),
       h('div', { class: 'small' }, external(r.source_url, `${r.year} record ↗`))),
     cell('Last filed by / audit', filedOrAudit(r)),
-    cell('Outreach line', outreachCell(r)));
+    // "wide": on phones the label sits above the line, which gets the full card width.
+    h('td', { 'data-label': 'Outreach line', class: 'wide' }, h('div', {}, outreachCell(r))));
 }
 
 function renderMore() {

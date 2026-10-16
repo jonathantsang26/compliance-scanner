@@ -70,6 +70,9 @@
 
 * { box-sizing: border-box; }
 
+/* The hidden attribute wins over display rules such as button's inline-block. */
+[hidden] { display: none !important; }
+
 html { -webkit-text-size-adjust: 100%; }
 
 body {
@@ -198,7 +201,12 @@ td { font-variant-numeric: tabular-nums; }
 .prospects .status-chip { min-width: 9em; }
 .filters { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 16px; margin: 0 0 12px; }
 .filters label { display: grid; gap: 4px; font-size: 0.85rem; color: var(--muted); }
-.filters select { font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--field-border); border-radius: 8px; padding: 8px; }
+/* A select is as wide as its longest option unless told otherwise; this keeps
+   each one inside its column. A long size-band label is cut off when closed. */
+.filters select {
+  font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--field-border); border-radius: 8px; padding: 8px;
+  width: 100%; min-width: 0; max-width: 100%; text-overflow: ellipsis;
+}
 .filters .checks { display: grid; gap: 6px; align-content: start; }
 .filters .checks label { display: flex; gap: 8px; align-items: center; color: var(--text); font-size: 0.9rem; }
 .toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin: 0 0 12px; }
@@ -213,6 +221,8 @@ td { font-variant-numeric: tabular-nums; }
 @media (max-width: 640px) {
   .line-cell { min-width: 0; max-width: none; }
   .prospects .status-chip { min-width: 0; }
+  /* The outreach line is long, so its label sits above it and the line gets the card's full width. */
+  .prospects td.wide { grid-template-columns: minmax(0, 1fr); gap: 2px; }
 }
 
 .error { background: var(--bad-bg); color: var(--bad-text); padding: 12px 14px; border-radius: var(--radius); }

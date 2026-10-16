@@ -8,6 +8,7 @@
   <link rel="icon" href="favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="css/style.css">
   <script type="module" src="js/home.js"></script>
+  <noscript><style>.js-only { display: none !important; }</style></noscript>
 </head>
 <body>
   <header class="site-header">
@@ -22,7 +23,12 @@
   <main class="wrap">
     <h1>Is this building out of compliance with its city's energy benchmarking law?</h1>
     <p class="lede">Los Angeles (EBEWE) and San Francisco (Existing Buildings Energy Performance Ordinance), according to each city's own public data.</p>
-    <form id="search-form" class="search" role="search">
+    <noscript>
+      <p class="notice">Search needs JavaScript. Each city's data is also on its open data site:
+        <a href="https://data.lacity.org/d/9yda-i4ya">Los Angeles (LADBS)</a> and
+        <a href="https://data.sf.gov/d/96ck-qcfe">San Francisco (SF Environment)</a>.</p>
+    </noscript>
+    <form id="search-form" class="search js-only" role="search">
       <label for="q" class="sr-only">Address, building name, LA building ID or SF parcel number</label>
       <input id="q" name="q" type="search" placeholder="Address, building name, LA building ID or SF parcel" autocomplete="off" spellcheck="false" enterkeyhint="search">
       <button type="submit">Search</button>

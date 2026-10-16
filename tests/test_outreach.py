@@ -8,7 +8,7 @@ import pytest
 
 from scanner.config import DB_PATH, SF_DUE_DATE_SENTENCES, SITE
 from scanner.export import building_records, city_meta
-from scanner.outreach import CITY_OWNED_REASON, la_line, outreach_for, sf_line
+from scanner.outreach import CITY_OWNED_REASON, LA_HELD_REASON, la_line, outreach_for, sf_line
 
 FORBIDDEN = re.compile(r"not filed|didn'?t file|did not file|failed to file|never filed|penalt|\bfine[sd]?\b|\$", re.I)
 LA_URL = "https://data.lacity.org/resource/9yda-i4ya.json?building_id=476102819647&program_year=2025"
@@ -58,6 +58,12 @@ def test_sf_due_date_sentence_only_for_a_year_with_a_known_date():
 
 needs_db = pytest.mark.skipif(not DB_PATH.exists(), reason="no database yet")
 
+
+def test_held_notes_name_no_internal_file_or_unconfirmed_date():
+    # These notes appear on public pages. The LA meaning and due date wait for the founder's sign-off.
+    for note in (LA_HELD_REASON.format(year=2025), CITY_OWNED_REASON):
+        assert not re.search(r"docs/|\.md\b|\bdue\b|June", note), note
+        assert not FORBIDDEN.search(note), note
 
 @pytest.fixture(scope="module")
 def records_and_meta():

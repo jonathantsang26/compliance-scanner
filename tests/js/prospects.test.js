@@ -113,6 +113,22 @@ test('CSV keeps the spec columns first and the extras after', () => {
   assert.deepEqual(CSV_COLUMNS.slice(-2), ['same_address_others', 'same_address_complied']);
 });
 
+test('CSV tells a withheld name apart from "no entity listed"', { skip }, () => {
+  assert.ok(CSV_COLUMNS.indexOf('last_filed_by_note') > CSV_COLUMNS.indexOf('outreach_line'), 'an extra, after the spec columns');
+  const csv = parseCsv(toCsv(rows, meta));
+  const withheld = csv.records.filter((r) => r.last_filed_by_note === 'withheld');
+  assert.equal(withheld.length, rows.filter((r) => r.last_filed_by_note === 'withheld').length);
+  assert.ok(withheld.length > 0, 'the data has withheld names to check');
+  for (const r of withheld) {
+    assert.equal(r.last_filed_by, '', r.id);
+    assert.match(r.last_filed_year, /^\d{4}$/, r.id);
+  }
+  // A COMPLIED year with no entity listed has an empty note.
+  const unnamed = csv.records.filter((r) => r.last_filed_year && !r.last_filed_by && !r.last_filed_by_note);
+  assert.ok(unnamed.length > 0, 'the data has COMPLIED years with no entity listed');
+  assert.ok(csv.records.every((r) => ['', 'withheld'].includes(r.last_filed_by_note)));
+});
+
 test('CSV carries the same-address counts', { skip }, () => {
   const shared = rows.filter((r) => r.same_address_others > 0);
   assert.ok(shared.length > 0);

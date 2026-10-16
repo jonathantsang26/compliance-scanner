@@ -271,7 +271,7 @@ def export(out_dir=OUT, extra_files=None) -> dict:
         "flags": {
             "la_outreach_approved": LA_OUTREACH_APPROVED,
             "sf_due_date_confirmed": SF_DUE_DATE_CONFIRMED,
-            "la_held_reason": LA_HELD_REASON.format(year=REPORT_YEAR["LA"], next_year=REPORT_YEAR["LA"] + 1),
+            "la_held_reason": LA_HELD_REASON.format(year=REPORT_YEAR["LA"]),
             "la_live_status_url": LA_LIVE_STATUS_URL.format(year=REPORT_YEAR["LA"]),
         },
     }

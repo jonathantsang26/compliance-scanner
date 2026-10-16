@@ -19,10 +19,8 @@ import sys
 
 from .config import DB_PATH, LA_OUTREACH_APPROVED, SF_DUE_DATE_CONFIRMED, SF_DUE_DATE_SENTENCES
 
-LA_HELD_REASON = (
-    "LA outreach lines are held until the founder signs off on what LADBS's "
-    "program year {year} means (docs/research/benchmark-year.md: calendar-{year} data, due June 1, {next_year})."
-)
+# Shown on public pages, so it names no internal file and no unconfirmed date.
+LA_HELD_REASON = "LA outreach lines are held until the founder signs off on what LADBS's program year {year} covers."
 CITY_OWNED_REASON = "City-owned building: kept out of outreach."
 
 
@@ -65,7 +63,7 @@ def outreach_for(b: dict, as_of_label: str, la_approved: bool = LA_OUTREACH_APPR
         return {"line": None, "held_reason": CITY_OWNED_REASON, "source_url": source_url}
     if b["city"] == "LA":
         if not la_approved:
-            reason = LA_HELD_REASON.format(year=year, next_year=year + 1)
+            reason = LA_HELD_REASON.format(year=year)
             return {"line": None, "held_reason": reason, "source_url": source_url}
         line = la_line(b["address"], year, as_of_label, b["segment"], b.get("last_filed_by"),
                        b.get("last_filed_year"), source_url)

@@ -57,6 +57,7 @@ function statusText(result, submitted) {
     // Enter only opens a building on an exact match (search().target), so
     // say why the list is still showing.
     if (exact && !exact.direct) return `LA building ID ${exact.doc.key} is listed first. Other buildings have ${exact.doc.key} as a house number.`;
+    if (result.bothCities) return 'Both LA and SF list a building at that address. Pick one:';
     if (addressMatches > 1) return `${addressMatches} records have that address. Pick one:`;
     return 'No exact match for that address. Closest matches:';
   }
@@ -91,12 +92,15 @@ async function run(query, { navigate = false } = {}) {
 }
 
 let timer;
+let userSearched = false; // typed or pressed Enter, possibly before the data loaded
 input.addEventListener('input', () => {
+  userSearched = true;
   clearTimeout(timer);
   timer = setTimeout(() => run(input.value), 120);
 });
 form.addEventListener('submit', (e) => {
   e.preventDefault();
+  userSearched = true;
   clearTimeout(timer);
   run(input.value, { navigate: true });
 });
@@ -110,7 +114,9 @@ async function init() {
     document.body.dataset.searchReady = 'true';
     const exact = q ? exactMatch(q, lookup) : null;
     if (exact?.direct) window.location.replace(buildingUrl(exact.doc.id));
-    else if (input.value.trim()) run(input.value);
+    // A ?q= search runs now, unless the person already searched: that search is
+    // waiting for the same data, and its message ("No exact match…") must stay.
+    else if (input.value.trim() && !userSearched) run(input.value);
   }, (err) => showError(status, `Search is unavailable (${err.message}).`));
 
   try {

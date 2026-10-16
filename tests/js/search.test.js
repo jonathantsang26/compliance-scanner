@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
 
 import {
-  buildIndex, cleanQuery, exactMatch, makeLookup, normalizeParcel, normalizeTerm, parseQuery, rankByDirection,
+  buildIndex, cleanQuery, exactMatch, makeLookup, neighbors, normalizeParcel, normalizeTerm, parseQuery, rankByDirection,
   search, shardOf, splitDirectional, tokenize,
 } from '../../site/js/core.js';
 
@@ -131,6 +131,121 @@ test('Enter shows the list when two records share the address', { skip }, () => 
   }
 });
 
+test('Enter opens a covered address typed exactly as the city lists it', { skip }, () => {
+  for (const address of [
+    // Street names that start with a direction word.
+    '4026 WEST BLVD', '4073 WEST BLVD', '6400 WEST BLVD', '3995 EAST BLVD', '1304 WEST SECOND ST',
+    '100 NORTH POINT ST', '400 NORTH POINT ST', '555 NORTH POINT ST', '140 South Van Ness Ave',
+    '1245 SOUTH VAN NESS AVE', '21 SOUTH PARK', '85 West Portal Ave.',
+    // House-number ranges.
+    '336-344 Mason Street', '1348-1380 Bush St',
+    // Street names that are also street types.
+    '5344 CIRCLE DR', '1355 W COURT ST', '1601 LANE ST',
+  ]) {
+    const doc = docs.find((d) => d.address === address);
+    assert.ok(doc, `${address} is in the data`);
+    assert.equal(target(address), doc.id, address);
+  }
+  // Spelled out works too.
+  assert.equal(target('85 West Portal Avenue'), 'sf:2979A/019');
+  assert.equal(target('100 North Point Street'), 'sf:0018/005');
+  assert.equal(target('5344 Circle Drive'), 'la:426287883657');
+});
+
+test('every covered address typed as listed opens, unless several records share it', { skip }, () => {
+  // Enter must never say "No exact match" for an address copied from the city's data.
+  for (const d of docs.filter((x, i) => i % 3 === 0 && /^\d/.test(x.address))) {
+    const r = search(d.address, index, lookup);
+    assert.ok(r.target || r.addressMatches > 1, `${d.id} ${d.address}`);
+  }
+});
+
+test('which readings of an address may open a building', { skip }, () => {
+  // The direction word as part of the street name: like "5500 Figueroa St", a
+  // missing directional is fine when only one building fits.
+  assert.equal(target('1240 West Blvd'), docs.find((d) => d.address === '1240 S WEST BLVD').id);
+  // A range counts from its first number only.
+  assert.equal(target('336 Mason St'), 'sf:0315/019');
+  assert.equal(target('344 Mason St'), null);
+  // Only the last word can be the street type: "4028 Blvd" names no street, and
+  // CIRCLE DR with its type left off is not an exact match.
+  assert.equal(target('4028 Blvd'), null);
+  assert.equal(target('5344 Circle'), null);
+  // LA's 616 ST PAUL AVE and 616 S ST PAUL AVE are two records, both listed (SF's PAUL AVE is another street).
+  const stPaul = search('616 St Paul Ave', index, lookup);
+  assert.equal(stPaul.target, null);
+  assert.equal(stPaul.addressMatches, 2);
+});
+
+test('an address that is not covered lists the nearest buildings on its street', { skip }, () => {
+  const r = search('4028 West Blvd', index, lookup);
+  assert.equal(r.target, null);
+  assert.deepEqual(r.hits.slice(0, 3).map((d) => d.address), ['4026 WEST BLVD', '4037 WEST BLVD', '4073 WEST BLVD']);
+  // A house number never matches the start of a building ID: LA building
+  // 402817883111 is 18019 VENTURA BLVD.
+  assert.ok(!r.hits.some((d) => d.id === 'la:402817883111'));
+  assert.ok(search('141 N Highland Ave', index, lookup).hits.some((d) => d.address === '900 N HIGHLAND AVE'));
+  // A street type still being typed lists the street too.
+  assert.equal(search('4028 West Bo', index, lookup).hits[0]?.address, '4026 WEST BLVD');
+  // A whole street name that also starts a street type ("Park", "Parkway") keeps its neighbors.
+  assert.ok(search('9999 Park', index, lookup).hits.some((d) => d.address === '6833 PARK TER'));
+});
+
+test('neighbors: same street and type, the query side first, nearest number first', () => {
+  const lk = makeLookup([
+    { id: 'a', city: 'LA', address: '4026 WEST BLVD', key: '1' },
+    { id: 'b', city: 'LA', address: '4073 WEST BLVD', key: '2' },
+    { id: 'c', city: 'LA', address: '4037 WEST BLVD', key: '3' },
+    { id: 'd', city: 'LA', address: '1240 S WEST BLVD', key: '4' },
+    { id: 'e', city: 'LA', address: '4030 W PICO BLVD', key: '5' },
+    { id: 'f', city: 'LA', address: '4029 WEST AVE', key: '6' },
+    { id: 'g', city: 'LA', address: '500 S HIGHLAND AVE', key: '7' },
+    { id: 'h', city: 'LA', address: '1400 N HIGHLAND AVE', key: '8' },
+    { id: 'i', city: 'SF', address: '1500 HIGHLAND AVE', key: '0001/001' },
+  ]);
+  const near = (q) => {
+    const p = parseQuery(q);
+    return neighbors([p, p.alt].filter(Boolean), lk).map((d) => d.id);
+  };
+  // WEST AVE is another street type; W PICO BLVD is another street.
+  assert.deepEqual(near('4028 West Blvd'), ['a', 'c', 'b', 'd']);
+  // No type typed: any type, at most five.
+  assert.deepEqual(near('4028 West'), ['f', 'a', 'c', 'b', 'd']);
+  // The other side of the street (N) is not near; no directional comes after S.
+  assert.deepEqual(near('1411 S Highland Ave'), ['g', 'i']);
+});
+
+test('the list never empties while a direction or street type is half typed', { skip }, () => {
+  for (const [q, address] of [
+    ['5500 So', '5500 S FIGUEROA ST'], ['100 No', '100 NORTH POINT ST'], ['720 Ea', '720 E E ST'],
+    ['1801 Century Park Ea', '1801 CENTURY PARK EAST'], ['1245 So', '1245 SOUTH VAN NESS AVE'],
+    ['6400 Hollywood Bo', '6400 HOLLYWOOD BLVD'], ['6400 Hollywood Bou', '6400 HOLLYWOOD BLVD'],
+    ['5331 Corteen Pla', '5331 CORTEEN PL'], ['222 Sec', '222 Second Street'],
+  ]) {
+    assert.ok(search(q, index, lookup).hits.some((d) => d.address === address), q);
+  }
+  // Every keystroke of an address typed out in full keeps the building in the list.
+  for (const [full, id] of [
+    ['5500 South Figueroa Street', 'la:476102819647'], ['1801 Century Park East', 'la:435722845266'],
+    ['6400 West Boulevard', 'la:460154815801'], ['6400 Hollywood Boulevard', 'la:461806859452'],
+    ['1245 South Van Ness Avenue', 'sf:3641/070'], ['720 East E Street', 'la:484560740860'],
+  ]) {
+    for (let n = full.indexOf(' ') + 2; n <= full.length; n++) {
+      const q = full.slice(0, n);
+      if (!q.endsWith(' ')) assert.ok(search(q, index, lookup).hits.some((d) => d.id === id), q);
+    }
+  }
+});
+
+test('a half-typed street type fills the list but never opens a building', { skip }, () => {
+  const r = search('6400 Hollywood Bo', index, lookup);
+  assert.equal(r.hits[0]?.address, '6400 HOLLYWOOD BLVD');
+  assert.equal(r.target, null);
+  assert.equal(target('6400 Hollywood Blvd'), r.hits[0].id);
+  // Nothing to complete: still nothing, and the page says so.
+  assert.equal(search('zzqx vvwk', index, lookup).hits.length, 0);
+});
+
 test('typing a covered address as the city lists it never opens a different address', { skip }, () => {
   let opened = 0;
   for (const d of docs.filter((_, i) => i % 20 === 0)) {
@@ -180,6 +295,14 @@ test('a query directional is a letter or word after the house number', () => {
   assert.equal(parseQuery('North Point').dir, null);
   assert.equal(parseQuery('600 N').dir, null);
   assert.deepEqual(parseQuery('North Point').words, ['n', 'point']);
+  // A spelled-out word may also start the street's name, so both readings are kept.
+  assert.equal(parseQuery('6400 West Blvd').dir, 'w');
+  assert.equal(parseQuery('6400 West Blvd').alt.text, '6400 West Blvd');
+  assert.equal(parseQuery('6400 West Blvd').alt.dir, null);
+  assert.equal(parseQuery('6400 W Blvd').alt, null);
+  // Every part of a house-number range.
+  assert.deepEqual(parseQuery('336-344 Mason St').houseWords, ['336', '344']);
+  assert.equal(parseQuery('336-344 Mason St').house, '336');
 });
 
 test('direction ranking keeps search order inside each group', () => {
@@ -252,6 +375,7 @@ test('half-typed street types and directions map to the abbreviation', () => {
     driv: 'dr', terr: 'ter', terra: 'ter', terrac: 'ter', parkw: 'pkwy', parkwa: 'pkwy',
     highw: 'hwy', highwa: 'hwy', squa: 'sq', squar: 'sq', circ: 'cir', circl: 'cir', plaz: 'plz',
     nor: 'n', nort: 'n', north: 'n', sou: 's', sout: 's', south: 's', eas: 'e', east: 'e', wes: 'w', west: 'w',
+    no: 'n', so: 's', ea: 'e', we: 'w',
   };
   for (const [word, term] of Object.entries(cases)) assert.equal(normalizeTerm(word), term, word);
   // Single letters are kept now (they used to be dropped).
@@ -274,4 +398,34 @@ test('the building stays in the results while a word is half typed', { skip }, (
   }
   assert.equal(topAddress('1801 Century Park Eas'), '1801 CENTURY PARK EAST');
   assert.equal(topAddress('600 Nort Broadway'), '600 N BROADWAY');
+});
+
+test('an address listed in both cities shows both instead of opening one', { skip }, () => {
+  // SF's 644 BROADWAY, and LA's 644 S BROADWAY with the directional left off.
+  for (const q of ['644 Broadway', '100 1st St', '401 3rd St', '1201 4th St']) {
+    const r = search(q, index, lookup);
+    assert.equal(r.target, null, q);
+    assert.ok(r.bothCities, q);
+    assert.deepEqual(new Set(r.hits.slice(0, r.addressMatches).map((d) => d.city)), new Set(['LA', 'SF']), q);
+  }
+  // With the directional typed, only LA's fits, so Enter opens it.
+  assert.equal(target('644 S Broadway'), 'la:485152838940');
+  // SF has a Pacific Ave but no 2300, so LA's 2300 S PACIFIC AVE is listed, not opened.
+  assert.equal(target('2300 Pacific Ave'), null);
+});
+
+test('"300 Grant Ave" lists the SF building named "300 Grant" first, without opening it', { skip }, () => {
+  for (const q of ['300 Grant Ave', '300 Grant Ave, San Francisco, CA 94108']) {
+    assert.equal(top(q), 'sf:0287/035', q);
+    assert.equal(target(q), null, q);
+  }
+  assert.equal(target('300 Grant'), 'sf:0287/035');
+});
+
+test('a different street type never opens a building, even when "St" reads as Saint', { skip }, () => {
+  assert.equal(target('553 S St Andrews St'), null);
+  assert.equal(target('600 St Paul St'), null);
+  assert.equal(target('553 S St Andrews Pl'), 'la:467170845786');
+  assert.equal(target('553 S St Andrews'), 'la:467170845786');
+  assert.equal(target('600 St Paul Ave'), 'la:482679841787');
 });

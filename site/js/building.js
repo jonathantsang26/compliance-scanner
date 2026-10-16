@@ -128,7 +128,8 @@ function outreach(b, meta) {
   if (!b.outreach) return null;
   const o = b.outreach;
   // LADBS's open data runs a few days behind its live status page (DRIFT.md item 16).
-  const liveCheck = b.city === 'LA' && meta.flags.la_live_status_url
+  // City-owned buildings are never sent a line, so they get no "before sending" note.
+  const liveCheck = b.city === 'LA' && !b.city_owned && meta.flags.la_live_status_url
     ? h('p', { class: 'muted small' }, 'Before sending, check this building on ',
       external(meta.flags.la_live_status_url, 'LADBS\'s live status page ↗'), '. It can be a few days ahead of the open data.')
     : null;

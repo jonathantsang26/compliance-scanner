@@ -7,6 +7,7 @@
   <link rel="icon" href="favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="css/style.css">
   <script type="module" src="js/building.js"></script>
+  <noscript><style>.js-only { display: none !important; }</style></noscript>
 </head>
 <body>
   <header class="site-header">
@@ -18,7 +19,14 @@
       </nav>
     </div>
   </header>
-  <main id="main" class="wrap"><p class="muted">Loading…</p></main>
+  <main id="main" class="wrap">
+    <p class="muted js-only">Loading…</p>
+    <noscript>
+      <p class="notice">This page needs JavaScript to show the building's records. Each city's data is also on its open data site:
+        <a href="https://data.lacity.org/d/9yda-i4ya">Los Angeles (LADBS)</a> and
+        <a href="https://data.sf.gov/d/96ck-qcfe">San Francisco (SF Environment)</a>.</p>
+    </noscript>
+  </main>
   <footer id="footer">
     <div class="wrap">
       <p class="independent">Independent project. Not affiliated with, endorsed by, or operated by LADBS or SF Environment.</p>

@@ -18,7 +18,9 @@ const SUFFIXES = {
 };
 
 // Half-typed words map to the same abbreviation, so results don't vanish
-// while someone is still typing "Street" or "North".
+// while someone is still typing "Street" or "North". The two-letter ones are
+// safe because each letter is a prefix of what it replaces: a prefix search
+// for "s" finds everything "so" would, and SOUTH too (indexed as "s").
 const PARTIAL_WORDS = {
   stre: 'st', stree: 'st',
   aven: 'ave', avenu: 'ave',
@@ -30,7 +32,7 @@ const PARTIAL_WORDS = {
   squa: 'sq', squar: 'sq',
   circ: 'cir', circl: 'cir',
   plaz: 'plz',
-  nor: 'n', nort: 'n', sou: 's', sout: 's', eas: 'e', wes: 'w',
+  no: 'n', nor: 'n', nort: 'n', so: 's', sou: 's', sout: 's', ea: 'e', eas: 'e', we: 'w', wes: 'w',
 };
 
 // Spelled-out directions become letters, so "North" and "N" are the same word.
@@ -136,39 +138,33 @@ export function cleanQuery(text) {
   return { text: s, zip };
 }
 
-// A query's directional is N/S/E/W or North/South/East/West right after the
-// house number, with more words after it. It is taken out of the words searched
-// and used to order the results instead (rankByDirection).
-export function parseQuery(query) {
-  const { text, zip } = cleanQuery(query);
-  const parts = text.split(/\s+/).filter(Boolean);
-  let dir = null;
-  let dirSpelled = false;
-  if (parts.length >= 3 && HOUSE_NUMBER.test(parts[0])) {
-    const t = normalizeTerm(parts[1]);
-    if (DIRECTION_LETTERS.has(t)) {
-      dir = t;
-      dirSpelled = parts[1].replace(/\./g, '').length > 1;
-      parts.splice(1, 1);
-    }
-  }
-  const searched = [...parts, zip].filter(Boolean).join(' ');
-  return { text: searched, words: terms(searched), house: houseNumber(searched), dir, dirSpelled, zip };
+// One reading of a query: the text searched, its words, and its house number.
+// `houseWords` holds every part of a range ("336-344 Mason St" -> 336, 344).
+function reading(parts, zip, dir) {
+  const text = [...parts, zip].filter(Boolean).join(' ');
+  const house = houseWords(text);
+  return { text, words: terms(text), house: house[0] ?? null, houseWords: house, dir, zip };
 }
 
-function withoutZip(parsed) {
-  const text = parsed.text.replace(new RegExp(`\\s*\\b${parsed.zip}$`), '');
-  return { ...parsed, text, words: terms(text), house: houseNumber(text), zip: null };
+// A query's directional is N/S/E/W or North/South/East/West right after the
+// house number, with more words after it. It is taken out of the words searched
+// and used to order the results instead (rankByDirection). A spelled-out word
+// can also be the start of the street's name ("6400 West Blvd" is on WEST BLVD),
+// so `alt` keeps that second reading, with the word left in. keepZip: false
+// drops a pasted ZIP.
+export function parseQuery(query, { keepZip = true } = {}) {
+  const cleaned = cleanQuery(query);
+  const zip = keepZip ? cleaned.zip : null;
+  const parts = cleaned.text.split(/\s+/).filter(Boolean);
+  const dir = parts.length >= 3 && HOUSE_NUMBER.test(parts[0]) ? normalizeTerm(parts[1]) : null;
+  if (DIRECTION_LETTERS.has(dir)) {
+    const spelled = parts[1].replace(/\./g, '').length > 1;
+    return { ...reading([parts[0], ...parts.slice(2)], zip, dir), alt: spelled ? reading(parts, zip, null) : null };
+  }
+  return { ...reading(parts, zip, null), alt: null };
 }
 
 // ---- index --------------------------------------------------------------------
-
-// Adds `dir` and `street` (the address without its directional) to a search
-// doc. Done in place, so the index and the lookup share the same objects.
-function prepareDoc(d) {
-  if (d.street === undefined) Object.assign(d, splitDirectional(d.address));
-  return d;
-}
 
 // The words of an address or name, without the part after a comma or a unit
 // number ("Pier 17, Suite 100" -> pier, 17).
@@ -176,9 +172,28 @@ function fieldWords(text) {
   return terms(text.split(',')[0].replace(UNIT, ' '));
 }
 
-// The street name alone: no house number, ZIP or street type ("5500 FIGUEROA ST" -> "figueroa").
-function streetName(words, skip = []) {
-  return words.filter((w) => !skip.includes(w) && !STREET_TYPES.has(w)).join(' ');
+// The street name without the house number or ZIP (`skip`), and the street
+// type at the end apart: "5500 FIGUEROA ST" -> {name: "figueroa", type: "st"}.
+// Only the last word can be the type, so a street named for one keeps it
+// ("5344 CIRCLE DR" -> "cir"), and "4028 Blvd" names no street.
+function streetParts(words, skip = []) {
+  const rest = words.filter((w) => !skip.includes(w));
+  const type = STREET_TYPES.has(rest[rest.length - 1]) ? rest.pop() : null;
+  return { name: rest.join(' '), type };
+}
+
+// Adds to a search doc, once: `dir` and `street` (the address without its
+// directional), and the street's name, type and house number, used to find
+// the nearest buildings on a street. Done in place, so the index and the
+// lookup share the same objects.
+function prepareDoc(d) {
+  if (d.street !== undefined) return d;
+  Object.assign(d, splitDirectional(d.address));
+  const house = houseWords(d.street);
+  const { name, type } = streetParts(fieldWords(d.street), house);
+  return Object.assign(d, {
+    streetName: name, streetType: type, houseInt: house.length ? Number.parseInt(house[0], 10) : null,
+  });
 }
 
 export function buildIndex(docs) {
@@ -219,6 +234,8 @@ export function makeLookup(docs) {
   const houseNumbers = new Set();
   // Street names per city, to spot a street that exists in both ("PACIFIC AVE").
   const streets = { LA: new Set(), SF: new Set() };
+  // Buildings with a house number, by street name, to find the nearest ones.
+  const byStreet = new Map();
   for (const d of docs) {
     prepareDoc(d);
     byId.set(d.id, d);
@@ -226,9 +243,13 @@ export function makeLookup(docs) {
     else sfKeys.set(d.key, d);
     const m = /^\s*(\d+)/.exec(d.address || '');
     if (m) houseNumbers.add(m[1]);
-    streets[d.city]?.add(streetName(fieldWords(d.street), houseWords(d.street)));
+    streets[d.city]?.add(d.streetName);
+    if (d.streetName && d.houseInt != null) {
+      if (!byStreet.has(d.streetName)) byStreet.set(d.streetName, []);
+      byStreet.get(d.streetName).push(d);
+    }
   }
-  return { byId, laKeys, sfKeys, houseNumbers, streets };
+  return { byId, laKeys, sfKeys, houseNumbers, streets, byStreet };
 }
 
 // Returns {doc, direct} when the query is a building ID or parcel number.
@@ -258,15 +279,16 @@ export function exactMatch(query, lookup) {
 // ---- search -------------------------------------------------------------------
 
 // True when the building's address (or its SF building name) says the same as
-// the query: the same house number, the same street name word for word (the
-// street type may be left off), any ZIP given matches, and no other
+// the query: the same house number (a range like 336-344 counts from its first
+// number, and every part typed must be in it), the same street name word for
+// word (the street type may be left off), any ZIP given matches, and no other
 // directional. Only then may pressing Enter open the building without
 // showing the list. So "Green" or "4028 Blvd" only list matches, and
 // "90 Montgomery St" does not open 90 NEW MONTGOMERY ST.
 export function isAddressMatch(parsed, doc, lookup) {
   if (!parsed.house) return false;
   if (parsed.dir && parsed.dir !== doc.dir) return false;
-  const street = streetName(parsed.words, [parsed.house, parsed.zip]);
+  const { name: street, type } = streetParts(parsed.words, [...(parsed.houseWords ?? [parsed.house]), parsed.zip]);
   if (!street) return false;
   // SF addresses have no directionals, so "2300 Pacific Ave" may mean SF's
   // Pacific Ave rather than LA's 2300 S PACIFIC AVE: list both cities instead.
@@ -274,9 +296,12 @@ export function isAddressMatch(parsed, doc, lookup) {
   return [prepareDoc(doc).street, doc.name].some((field) => {
     if (!field || houseNumber(field) !== parsed.house) return false;
     const words = fieldWords(field);
-    const house = houseWords(field);
+    const own = streetParts(words, houseWords(field));
     const allowed = new Set(doc.zip ? [...words, doc.zip] : words);
-    return parsed.words.every((w) => allowed.has(w)) && streetName(words, house) === street;
+    // A street type that was typed must be the building's own. "St" can also
+    // be Saint, so "553 S St Andrews St" is not 553 S ST ANDREWS PL.
+    return parsed.words.every((w) => allowed.has(w)) && own.name === street
+      && (!type || !own.type || own.type === type);
   });
 }
 
@@ -291,18 +316,33 @@ export function rankByDirection(docs, dir, asStreet = new Set()) {
 }
 
 const EXACT_WORDS = { prefix: false, fuzzy: false };
+// For an address, the prefix and typo pass leaves out the building ID, so a
+// house number never matches the start of an ID ("4028 West Blvd" is not LA
+// building 402817883111). A lone number still does ("4761028").
+const ADDRESS_FIELDS = { fields: ['address', 'name', 'zip', 'dir'] };
+
+// SF building names often leave off the street type: the building named
+// "300 Grant" is at 300 Grant Ave. So an address also searches the names
+// without its street type. These hits are listed, never opened on Enter.
+function namesWithoutType(parsed, index) {
+  const words = parsed.words.filter((w) => w !== parsed.zip);
+  if (!parsed.house || words.length < 3 || !STREET_TYPES.has(words[words.length - 1])) return [];
+  return index.search(words.slice(0, -1).join(' '), { ...EXACT_WORDS, fields: ['name'] });
+}
 
 // Whole-word matches first, then prefix and typo matches, so "300 Grant" lists
 // the SF building named "300 Grant" above 300 S GRAND AVE.
 function runSearch(parsed, index, lookup) {
   if (!parsed.text) return { docs: [], exactIds: new Set() };
   // "6400 West Blvd": also try "West" as part of the street name (WEST BLVD).
-  const asStreet = parsed.dirSpelled ? index.search(`${parsed.dir} ${parsed.text}`, EXACT_WORDS) : [];
+  const asStreet = parsed.alt ? index.search(parsed.alt.text, EXACT_WORDS) : [];
   const exactPasses = [...asStreet, ...index.search(parsed.text, EXACT_WORDS)];
   const exactIds = new Set(exactPasses.map((r) => r.id));
+  const isAddress = parsed.house && parsed.words.length > parsed.houseWords.length;
   const seen = new Set();
   const docs = [];
-  for (const r of [...exactPasses, ...index.search(parsed.text)]) {
+  for (const r of [...exactPasses, ...namesWithoutType(parsed, index),
+    ...index.search(parsed.text, isAddress ? ADDRESS_FIELDS : {})]) {
     if (seen.has(r.id)) continue;
     seen.add(r.id);
     docs.push(lookup.byId.get(r.id));
@@ -310,30 +350,94 @@ function runSearch(parsed, index, lookup) {
   return { docs: rankByDirection(docs, parsed.dir, new Set(asStreet.map((r) => r.id))), exactIds };
 }
 
-// Returns {exact, hits, target, addressMatches}. target is the building Enter
+// The closest matches for an address the data doesn't have: buildings on the
+// same street, nearest house number first ("4028 West Blvd" -> 4026 and 4037
+// WEST BLVD). A street type or directional in the query must not disagree.
+export function neighbors(readings, lookup, count = 5) {
+  const scored = [];
+  for (const p of readings) {
+    const { name, type } = streetParts(p.words, [...p.houseWords, p.zip]);
+    if (!p.house || !name) continue;
+    const house = Number.parseInt(p.house, 10);
+    for (const d of lookup.byStreet.get(name) ?? []) {
+      if ((type && d.streetType && d.streetType !== type) || (p.dir && d.dir && d.dir !== p.dir)) continue;
+      // The query's own side of the street first, then buildings with no directional.
+      scored.push({ d, side: p.dir && d.dir !== p.dir ? 1 : 0, gap: Math.abs(d.houseInt - house) });
+    }
+  }
+  scored.sort((a, b) => a.side - b.side || a.gap - b.gap);
+  return [...new Set(scored.map((s) => s.d))].slice(0, count);
+}
+
+// The text with its last word swapped for each street type or ordinal that
+// word could be the start of: "6400 Hollywood Bo" -> "6400 Hollywood blvd".
+function completions(text) {
+  const parts = text.split(/\s+/);
+  const last = (parts.pop() ?? '').toLowerCase().replace(/[.'’]/g, '');
+  if (last.length < 2 || /\d/.test(last)) return [];
+  const words = new Set();
+  for (const [word, short] of WORD_MAP) if (word.length > last.length && word.startsWith(last)) words.add(short);
+  return [...words].map((short) => [...parts, short].join(' '));
+}
+
+// Returns {exact, hits, target, addressMatches, bothCities}. target is the building Enter
 // should open, or null when the list should stay up: an ID or parcel number,
 // or an address that matches exactly one building word for word. Exact address
-// matches are listed first.
+// matches are listed first; with none, the nearest buildings on the same
+// street are listed last.
 export function search(query, index, lookup, limit = 25) {
   const exact = exactMatch(query, lookup);
   let parsed = parseQuery(query);
   let found = runSearch(parsed, index, lookup);
-  let zipDropped = false;
+  // Set when the words searched are not the ones typed; Enter then never opens a building.
+  let guessed = false;
   if (!found.docs.length && parsed.zip) {
     // The city's ZIP can differ from the one pasted; try again without it.
-    parsed = withoutZip(parsed);
+    parsed = parseQuery(query, { keepZip: false });
     found = runSearch(parsed, index, lookup);
-    zipDropped = true;
+    guessed = true;
   }
-  const matches = found.docs.filter((d) => found.exactIds.has(d.id) && isAddressMatch(parsed, d, lookup))
+  // A guess whose street neighbors are listed too ("4028 West Bo" -> WEST BLVD).
+  let nearGuess = null;
+  if (!found.docs.length) {
+    // A street type or ordinal still being typed ("Hollywood Bo", "222 Sec")
+    // would match nothing, so try the words it may become.
+    const tries = completions(cleanQuery(query).text).map((text) => {
+      const p = parseQuery(text);
+      return { p, f: runSearch(p, index, lookup) };
+    });
+    const pick = tries.find((t) => t.f.docs.length);
+    if (pick) {
+      ({ p: parsed, f: found } = pick);
+      guessed = true;
+    } else {
+      // Still nothing: the last word may be a whole street name ("9999 Park"),
+      // so neighbors come from what was typed and from the first guess.
+      nearGuess = tries[0]?.p ?? null;
+    }
+  }
+  // Either reading of "6400 West Blvd" can match: 6400 W ... BLVD or 6400 WEST BLVD.
+  const readings = [parsed, parsed.alt].filter(Boolean);
+  const strict = found.docs.filter((d) => found.exactIds.has(d.id) && readings.some((p) => isAddressMatch(p, d, lookup)));
+  // "644 Broadway" is SF's 644 BROADWAY, and may be LA's 644 S BROADWAY with the
+  // directional left off. isAddressMatch sets the LA record aside (see "2300
+  // Pacific Ave"); add it back (no lookup: no cross-city rule) so Enter lists both.
+  const otherCity = strict.length ? found.docs.filter((d) => !strict.includes(d) && d.city !== strict[0].city
+    && found.exactIds.has(d.id) && readings.some((p) => isAddressMatch(p, d, null))) : [];
+  const matches = [...strict, ...otherCity]
     // Of two records at "22122 VICTORY BLVD" and "22122 W VICTORY BLVD", list the one typed first.
     .sort((a, b) => (a.dir === parsed.dir ? 0 : 1) - (b.dir === parsed.dir ? 0 : 1));
-  let hits = [...matches, ...found.docs.filter((d) => !matches.includes(d))].slice(0, limit);
+  const others = found.docs.filter((d) => !matches.includes(d));
+  const listed = new Set(found.docs);
+  const nearReadings = [...readings, nearGuess, nearGuess?.alt].filter(Boolean);
+  const near = matches.length ? [] : neighbors(nearReadings, lookup).filter((d) => !listed.has(d));
+  // The neighbors keep their places even when the other matches fill the list.
+  let hits = [...matches, ...others.slice(0, Math.max(0, limit - matches.length - near.length)), ...near].slice(0, limit);
   if (exact) hits = [exact.doc, ...hits.filter((d) => d.id !== exact.doc.id)].slice(0, limit);
   let target = null;
   if (exact?.direct) target = exact.doc;
-  else if (!exact && !zipDropped && matches.length === 1) target = matches[0];
-  return { exact, hits, target, addressMatches: matches.length, parsed };
+  else if (!exact && !guessed && matches.length === 1) target = matches[0];
+  return { exact, hits, target, addressMatches: matches.length, bothCities: new Set(matches.map((d) => d.city)).size > 1, parsed };
 }
 
 // ---- building files -----------------------------------------------------------
@@ -457,10 +561,12 @@ export function filtersToParams(f) {
 }
 
 // The spec's CSV columns first, in the spec's order, then the extras.
+// last_filed_by_note is "withheld" where the city's value may name a person,
+// so an empty last_filed_by there doesn't read as "no entity listed".
 export const CSV_COLUMNS = [
   'id', 'city', 'address', 'size_band', 'segment', 'status_raw', 'year', 'last_filed_by', 'audit_status',
-  'as_of', 'source_url', 'outreach_line', 'priority', 'history', 'last_filed_year', 'building_name',
-  'same_address_others', 'same_address_complied',
+  'as_of', 'source_url', 'outreach_line', 'priority', 'history', 'last_filed_year', 'last_filed_by_note',
+  'building_name', 'same_address_others', 'same_address_complied',
 ];
 
 // Spreadsheet apps run a cell that starts with = + - @ as a formula. A leading
@@ -488,6 +594,7 @@ export function csvRecord(r, meta) {
     priority: r.priority === 'excluded' ? 'Excluded (city-owned)' : r.priority,
     history: SEGMENT_LABELS[r.history] ?? '',
     last_filed_year: r.last_filed_year ?? '',
+    last_filed_by_note: r.last_filed_by_note ?? '',
     building_name: r.name ?? '',
     same_address_others: r.same_address_others ?? '',
     same_address_complied: r.same_address_complied ?? '',

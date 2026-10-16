@@ -7,6 +7,7 @@
   <link rel="icon" href="favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="css/style.css">
   <script type="module" src="js/prospects.js"></script>
+  <noscript><style>.js-only { display: none !important; }</style></noscript>
 </head>
 <body>
   <header class="site-header">
@@ -23,15 +24,20 @@
     <p class="lede">Buildings each city lists as out of compliance for 2025. Priority A: LA buildings listed as COMPLIED for 2024 but NOT COMPLIED for 2025 (lapsed), and every SF violation. Priority B: other LA non-compliers. Within each priority, larger buildings come first.</p>
     <p id="asof" class="muted small"></p>
     <div id="notices"></div>
-    <details id="filter-panel" class="filter-panel" open>
+    <noscript>
+      <p class="notice">The prospect list needs JavaScript. Each city's data is also on its open data site:
+        <a href="https://data.lacity.org/d/9yda-i4ya">Los Angeles (LADBS)</a> and
+        <a href="https://data.sf.gov/d/96ck-qcfe">San Francisco (SF Environment)</a>.</p>
+    </noscript>
+    <details id="filter-panel" class="filter-panel js-only" open>
       <summary>Filters</summary>
       <form id="filters" class="filters" aria-label="Filters"></form>
     </details>
-    <div class="toolbar">
+    <div class="toolbar js-only">
       <p class="count" style="margin:0"><span id="count" aria-live="polite">Loading…</span></p>
       <button type="button" id="download" disabled>Download CSV</button>
     </div>
-    <div class="table-wrap">
+    <div class="table-wrap js-only">
       <table class="stack prospects">
         <thead>
           <tr>
